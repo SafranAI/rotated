@@ -5,43 +5,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from rotated.layers import ConvBNLayer
+
 
 def _get_clones(module: nn.Module, num_copies: int) -> nn.ModuleList:
     """Create N identical copies of a module."""
     return nn.ModuleList([copy.deepcopy(module) for _ in range(num_copies)])
-
-
-class ConvBNLayer(nn.Module):
-    """Basic convolutional layer with batch normalization and activation."""
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        filter_size: int = 1,
-        stride: int = 1,
-        padding: int = 0,
-        act: str | None = "relu",
-    ):
-        super().__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, filter_size, stride, padding, bias=False)
-        self.bn = nn.BatchNorm2d(out_channels)
-        self.act = self._get_activation(act)
-
-    def _get_activation(self, act: str | None) -> nn.Module:
-        """Get activation function based on string identifier."""
-        activation_map = {
-            "swish": nn.SiLU(),
-            "leaky": nn.LeakyReLU(0.1),
-            "relu": nn.ReLU(),
-            "gelu": nn.GELU(),
-            None: nn.Identity(),
-        }
-        return activation_map.get(act, nn.ReLU())
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass through conv-bn-activation sequence."""
-        return self.act(self.bn(self.conv(x)))
 
 
 class BasicBlock(nn.Module):
@@ -351,4 +320,4 @@ if __name__ == "__main__":
     for i, output in enumerate(outputs):
         assert output.shape[1] == expected_channels[i], f"Channel mismatch at P{i + 3}"
 
-    print("✅ Forward pass successful")
+    print("Forward pass successful")

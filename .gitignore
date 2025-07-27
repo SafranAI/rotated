@@ -40,3 +40,6 @@ htmlcov/
 
 # Ruff cache
 .ruff_cache/
+
+# UV
+.python-version

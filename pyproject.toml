@@ -8,37 +8,11 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "numpy>=2.0.2",
+    "numpy",
     "opencv-python-headless>=4.11.0.86",
-    "shapely>=2.0.7",
-]
-
-[project.optional-dependencies]
-cpu = [
-    "torch==2.2.0",
-    "torchvision>=0.17.0",
-]
-cu118 = [
-    "torch>=2.2.0",
-    "torchvision>=0.17.0",
-]
-
-[tool.uv]
-conflicts = [
-    [
-        { extra = "cpu" },
-        { extra = "cu118" },
-    ],
-]
-
-[tool.uv.sources]
-torch = [
-    { index = "pytorch-cpu", extra = "cpu" },
-    { index = "pytorch-cu118", extra = "cu118" },
-]
-torchvision = [
-    { index = "pytorch-cpu", extra = "cpu" },
-    { index = "pytorch-cu118", extra = "cu118" },
+    "shapely",
+    "torch; platform_machine!='x86_64' and sys_platform!='darwin'",
+    "torchvision; platform_machine!='x86_64' and sys_platform!='darwin'",
 ]
 
 [[tool.uv.index]]
@@ -56,6 +30,14 @@ dev = [
     "ipykernel>=6.29.5",
     "pytest>=8.4.1",
     "ruff>=0.12.4",
+]
+macos-x86 = [
+    "torch==2.2.0",
+    "torchvision==0.17.0",
+]
+macos-dev = [
+    { include-group = "dev" },
+    { include-group = "macos-x86" },
 ]
 
 [build-system]

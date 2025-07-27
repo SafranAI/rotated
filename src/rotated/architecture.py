@@ -136,4 +136,4 @@ if __name__ == "__main__":
     losses, cls_scores, decoded_boxes = model(test_images, test_targets)
     losses["total"].backward()
 
-    print("✅ Forward and backward pass successful")
+    print("Forward and backward pass successful")

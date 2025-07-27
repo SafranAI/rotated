@@ -125,9 +125,7 @@ class ProbIoULoss(nn.Module):
         """
         iou = self.probiou(pred_boxes, target_boxes)
 
-        if self.mode == "iou":
-            loss = 1.0 - iou
-        elif self.mode == "l1":
+        if self.mode == "iou" or self.mode == "l1":
             loss = 1.0 - iou
         elif self.mode == "l2":
             l1_loss = 1.0 - iou
@@ -142,31 +140,3 @@ class ProbIoULoss(nn.Module):
             return loss.sum()
 
         return loss
-
-
-if __name__ == "__main__":
-    # Basic functionality test
-    torch.manual_seed(42)
-
-    # Test ProbIoU
-    prob_iou = ProbIoU(eps=1e-3)
-
-    # Create test boxes
-    pred_boxes = torch.tensor([[10.0, 10.0, 6.0, 4.0, 0.0], [20.0, 20.0, 8.0, 6.0, 0.785]])
-    target_boxes = torch.tensor([[10.0, 10.0, 6.0, 4.0, 0.0], [22.0, 22.0, 8.0, 6.0, 0.785]])
-
-    iou_values = prob_iou(pred_boxes, target_boxes)
-    print(f"ProbIoU values: {iou_values}")
-
-    # Test ProbIoULoss
-    prob_loss = ProbIoULoss(eps=1e-3, mode="l1", reduction="mean")
-    loss_value = prob_loss(pred_boxes, target_boxes)
-    print(f"ProbIoU loss: {loss_value}")
-
-    # Test gradient computation
-    pred_boxes_grad = pred_boxes.clone().requires_grad_(True)
-    loss_value = prob_loss(pred_boxes_grad, target_boxes)
-    loss_value.backward()
-    print(f"Gradient norm: {pred_boxes_grad.grad.norm()}")
-
-    print("All tests passed!")

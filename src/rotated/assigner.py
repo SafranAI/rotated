@@ -425,6 +425,6 @@ if __name__ == "__main__":
         partial_positive = (partial_labels < bg_index).sum().item()
         print(f"✓ Partial GT test: {partial_positive} positive assignments")
 
-        print("✅ All tests passed!")
+        print("All tests passed!")
 
     test_basic_functionality()

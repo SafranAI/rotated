@@ -344,4 +344,4 @@ if __name__ == "__main__":
         empty_cls_scores, empty_cls_logits, empty_boxes, empty_angles, empty_targets, anchor_points, stride_tensor
     )
 
-    print("✅ Forward and backward pass successful")
+    print("Forward and backward pass successful")

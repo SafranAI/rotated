@@ -5,42 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-class ConvBNLayer(nn.Module):
-    """Basic Conv + BN + Activation block."""
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int = 1,
-        stride: int = 1,
-        padding: int = 0,
-        act: str = "swish",
-    ):
-        super().__init__()
-
-        if in_channels <= 0:
-            raise ValueError(f"Input channels must be positive, got {in_channels}")
-        if out_channels <= 0:
-            raise ValueError(f"Output channels must be positive, got {out_channels}")
-
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=False)
-        self.bn = nn.BatchNorm2d(out_channels)
-        self.act = self._get_activation(act)
-
-    def _get_activation(self, act: str) -> nn.Module:
-        if act == "swish":
-            return nn.SiLU()
-        elif act == "relu":
-            return nn.ReLU()
-        elif act is None:
-            return nn.Identity()
-        else:
-            raise NotImplementedError(f"Activation {act} not implemented")
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.act(self.bn(self.conv(x)))
+from rotated.layers import ConvBNLayer
 
 
 class ESEAttn(nn.Module):
@@ -392,4 +357,4 @@ if __name__ == "__main__":
     actual_anchors = cls_scores.shape[1]
     assert actual_anchors == expected_anchors, f"Expected {expected_anchors}, got {actual_anchors}"
 
-    print("✅ Forward pass successful")
+    print("Forward pass successful")
