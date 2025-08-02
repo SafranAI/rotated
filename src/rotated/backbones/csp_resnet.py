@@ -4,15 +4,64 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from rotated.layers import ConvBNLayer
+
+class ConvBNLayer(nn.Module):
+    """Basic convolutional layer with batch normalization and activation."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        filter_size: int = 3,
+        stride: int = 1,
+        groups: int = 1,
+        padding: int = 0,
+        act: str | None = None,
+    ):
+        super().__init__()
+
+        if in_channels <= 0:
+            raise ValueError(f"Input channels must be positive, got {in_channels}")
+        if out_channels <= 0:
+            raise ValueError(f"Output channels must be positive, got {out_channels}")
+        if filter_size <= 0:
+            raise ValueError(f"Filter size must be positive, got {filter_size}")
+
+        self.conv = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=filter_size,
+            stride=stride,
+            padding=padding,
+            groups=groups,
+            bias=False,
+        )
+
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.act = self._get_activation(act)
+
+    def _get_activation(self, act: str | None) -> nn.Module:
+        """Get activation function based on string identifier."""
+        activation_map = {
+            "swish": nn.SiLU(),
+            "leaky": nn.LeakyReLU(0.1),
+            "relu": nn.ReLU(),
+            "gelu": nn.GELU(),
+            "hardsigmoid": nn.Hardsigmoid(),
+            None: nn.Identity(),
+        }
+        return activation_map.get(act, nn.Identity())
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through conv-bn-activation sequence."""
+        x = self.conv(x)
+        x = self.bn(x)
+        x = self.act(x)
+        return x
 
 
 class RepVggBlock(nn.Module):
-    """RepVGG block with structural re-parameterization capability.
-
-    During training, uses separate 3x3 and 1x1 convolutions that can be
-    fused into a single 3x3 conv during inference for improved efficiency.
-    """
+    """RepVGG block with structural re-parameterization capability."""
 
     def __init__(self, in_channels: int, out_channels: int, act: str = "relu", alpha: bool = False):
         super().__init__()
@@ -111,11 +160,7 @@ class RepVggBlock(nn.Module):
 
 
 class BasicBlock(nn.Module):
-    """Basic residual block for CSPResNet.
-
-    Implements a residual connection with two convolutions: a standard ConvBNLayer
-    followed by a RepVggBlock, with optional shortcut connection.
-    """
+    """Basic residual block for CSPResNet."""
 
     def __init__(
         self, in_channels: int, out_channels: int, act: str = "relu", shortcut: bool = True, use_alpha: bool = False
@@ -146,11 +191,7 @@ class BasicBlock(nn.Module):
 
 
 class EffectiveSELayer(nn.Module):
-    """Effective Squeeze-Excitation layer.
-
-    From "CenterMask: Real-Time Anchor-Free Instance Segmentation"
-    Applies global average pooling followed by channel attention.
-    """
+    """Effective Squeeze-Excitation layer."""
 
     def __init__(self, channels: int, act: str = "hardsigmoid"):
         super().__init__()
@@ -179,11 +220,7 @@ class EffectiveSELayer(nn.Module):
 
 
 class CSPResStage(nn.Module):
-    """Cross Stage Partial ResNet stage.
-
-    Implements CSP structure with optional downsampling, attention mechanism,
-    and residual blocks. Splits features into two paths and merges them.
-    """
+    """Cross Stage Partial ResNet stage."""
 
     def __init__(
         self,
@@ -257,9 +294,14 @@ class CSPResStage(nn.Module):
 class CSPResNet(nn.Module):
     """Cross Stage Partial ResNet backbone for object detection.
 
-    CSPResNet improves information flow and reduces computational cost by
-    splitting feature maps into two parts and applying different processing
-    paths. Designed for efficient object detection tasks.
+    Feature levels correspond to stages after the stem:
+    - Level 0: First stage (stride 4)
+    - Level 1: Second stage (stride 8)
+    - Level 2: Third stage (stride 16)
+    - Level 3: Fourth stage (stride 32)
+
+    Default return_levels=(1, 2, 3) gives strides [8, 16, 32].
+    For detection including P2: return_levels=(0, 1, 2) gives strides [4, 8, 16].
     """
 
     def __init__(
@@ -267,7 +309,7 @@ class CSPResNet(nn.Module):
         layers: Sequence[int] = (3, 6, 6, 3),
         channels: Sequence[int] = (64, 128, 256, 512, 1024),
         act: str = "swish",
-        return_idx: Sequence[int] = (1, 2, 3),
+        return_levels: Sequence[int] = (1, 2, 3),  # Return stride [8, 16, 32] features
         use_large_stem: bool = False,
         width_mult: float = 1.0,
         depth_mult: float = 1.0,
@@ -287,11 +329,11 @@ class CSPResNet(nn.Module):
             raise ValueError(f"Width multiplier must be positive, got {width_mult}")
         if depth_mult <= 0:
             raise ValueError(f"Depth multiplier must be positive, got {depth_mult}")
-        if any(idx < 0 or idx >= len(layers) for idx in return_idx):
-            raise ValueError(f"Return indices must be in range [0, {len(layers) - 1}], got {return_idx}")
+        if any(idx < 0 or idx >= len(layers) for idx in return_levels):
+            raise ValueError(f"Return levels must be in range [0, {len(layers) - 1}], got {return_levels}")
 
         self.use_checkpoint = use_checkpoint
-        self.return_idx = list(return_idx)
+        self.return_levels = list(return_levels)
 
         # Apply multipliers and convert to lists for TorchScript compatibility
         channels_list = [max(round(c * width_mult), 1) for c in channels]
@@ -330,14 +372,7 @@ class CSPResNet(nn.Module):
             )
 
     def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
-        """Forward pass through CSPResNet backbone.
-
-        Args:
-            x: Input tensor with shape [B, 3, H, W]
-
-        Returns:
-            List of feature maps from specified return indices
-        """
+        """Extract features at specified levels."""
         x = self.stem(x)
         outs = []
 
@@ -348,32 +383,27 @@ class CSPResNet(nn.Module):
             else:
                 x = stage(x)
 
-            if idx in self.return_idx:
+            if idx in self.return_levels:
                 outs.append(x)
 
         return outs
 
     @property
     def out_channels(self) -> list[int]:
-        """Get output channel dimensions for returned feature levels."""
-        return [self._out_channels[i] for i in self.return_idx]
+        return [self._out_channels[i] for i in self.return_levels]
+
+    @property
+    def out_strides(self) -> list[int]:
+        return [self._out_strides[i] for i in self.return_levels]
 
 
 if __name__ == "__main__":
-    print("Testing CSPResNet")
-
-    # Create model
     model = CSPResNet()
-    model.eval()
-
-    # Test input
     test_input = torch.randn(1, 3, 224, 224)
 
-    # Forward pass
     with torch.no_grad():
         outputs = model(test_input)
 
-    # Verify outputs
-    assert len(outputs) == 3, f"Expected 3 outputs, got {len(outputs)}"
-
-    print("Forward pass successful")
+    print(f"Forward pass successful: {len(outputs)} features")
+    print(f"Output channels: {model.out_channels}")
+    print(f"Output strides: {model.out_strides}")

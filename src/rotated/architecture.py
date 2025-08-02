@@ -3,13 +3,13 @@ import math
 import torch
 import torch.nn as nn
 
-from rotated.backbone import CSPResNet
+from rotated.backbones import CSPResNet
 from rotated.criterion import RotatedDetectionLoss
 from rotated.head import PPYOLOERHead
 from rotated.neck import CustomCSPPAN
 
 
-class PPYOLOERv3(nn.Module):
+class PPYOLOER(nn.Module):
     """PP-YOLOE-R Architecture for Rotated Object Detection.
 
     Simple composition of backbone, neck, and head components.
@@ -49,7 +49,7 @@ class PPYOLOERv3(nn.Module):
         return self.head(features, targets)
 
 
-def create_ppyoloe_r_model(num_classes: int = 15) -> PPYOLOERv3:
+def create_ppyoloe_r_model(num_classes: int = 15) -> PPYOLOER:
     """Factory function to create a PP-YOLOE-R model with default configuration.
 
     Args:
@@ -62,7 +62,7 @@ def create_ppyoloe_r_model(num_classes: int = 15) -> PPYOLOERv3:
     backbone = CSPResNet(
         layers=[3, 6, 6, 3],
         channels=[64, 128, 256, 512, 1024],
-        return_idx=[1, 2, 3],  # Return P3, P4, P5 features
+        return_levels=[1, 2, 3],  # Return P3, P4, P5 features
         use_large_stem=True,
         act="swish",
     )
@@ -97,7 +97,7 @@ def create_ppyoloe_r_model(num_classes: int = 15) -> PPYOLOERv3:
     )
 
     # Compose full model
-    model = PPYOLOERv3(backbone, neck, head)
+    model = PPYOLOER(backbone, neck, head)
     return model
 
 

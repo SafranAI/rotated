@@ -11,6 +11,7 @@ dependencies = [
     "numpy",
     "opencv-python-headless>=4.11.0.86",
     "shapely",
+    "timm>=1.0",
     "torch; platform_machine!='x86_64' and sys_platform!='darwin'",
     "torchvision; platform_machine!='x86_64' and sys_platform!='darwin'",
 ]

@@ -2,9 +2,9 @@
 
 import torch
 
-from rotated.assigner.base import BaseTaskAlignedAssigner
-from rotated.assigner.calculators import HorizontalIoUCalculator
-from rotated.assigner.spatial import HorizontalSpatialChecker
+from rotated.assigners.base import BaseTaskAlignedAssigner
+from rotated.assigners.calculators import HorizontalIoUCalculator
+from rotated.assigners.spatial import HorizontalSpatialChecker
 
 
 class TaskAlignedAssigner(BaseTaskAlignedAssigner):

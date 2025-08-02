@@ -262,8 +262,8 @@ class BaseTaskAlignedAssigner(nn.Module):
 if __name__ == "__main__":
     print("Testing BaseTaskAlignedAssigner")
 
-    from rotated.assigner.calculators import RotatedIoUCalculator
-    from rotated.assigner.spatial import RotatedSpatialChecker
+    from rotated.assigners.calculators import RotatedIoUCalculator
+    from rotated.assigners.spatial import RotatedSpatialChecker
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

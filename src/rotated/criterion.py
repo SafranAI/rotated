@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from rotated.assigner import RotatedTaskAlignedAssigner
+from rotated.assigners import RotatedTaskAlignedAssigner
 from rotated.iou.prob_iou import ProbIoULoss
 
 
