@@ -1,4 +1,5 @@
-import math
+# Modified from PaddleDetection (https://github.com/PaddlePaddle/PaddleDetection)
+# Copyright (c) 2024 PaddlePaddle Authors. Apache 2.0 License.
 
 import torch
 import torch.nn as nn
@@ -69,12 +70,13 @@ def create_ppyoloe_r_model(num_classes: int = 15) -> PPYOLOER:
 
     # Create neck
     neck = CustomCSPPAN(
-        in_channels=[256, 512, 1024],  # From backbone return_idx
-        out_channels=[192, 384, 768],  # Match head expectations
+        in_channels=backbone.out_channels,
+        out_channels=[192, 384, 768],
         stage_num=1,
         block_num=3,
         act="swish",
         spp=True,
+        use_alpha=True,
     )
 
     # Create criterion
@@ -87,7 +89,7 @@ def create_ppyoloe_r_model(num_classes: int = 15) -> PPYOLOER:
 
     # Create head with integrated criterion
     head = PPYOLOERHead(
-        in_channels=[192, 384, 768],  # Match neck outputs
+        in_channels=neck.out_channels,
         num_classes=num_classes,
         fpn_strides=[8, 16, 32],  # P3, P4, P5 strides
         grid_cell_offset=0.5,
@@ -99,41 +101,3 @@ def create_ppyoloe_r_model(num_classes: int = 15) -> PPYOLOER:
     # Compose full model
     model = PPYOLOER(backbone, neck, head)
     return model
-
-
-if __name__ == "__main__":
-    print("Testing PP-YOLOE-R Architecture")
-
-    # Test parameters
-    batch_size = 2
-    num_classes = 15
-    img_size = 640
-    num_targets = 3
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Create model
-    model = create_ppyoloe_r_model(num_classes=num_classes)
-    model = model.to(device)
-
-    # Create test inputs
-    test_images = torch.randn(batch_size, 3, img_size, img_size, device=device)
-    test_targets = {
-        "labels": torch.randint(0, num_classes, (batch_size, num_targets, 1), device=device),
-        "boxes": torch.cat(
-            [
-                torch.rand(batch_size, num_targets, 2, device=device) * 400 + 100,
-                torch.rand(batch_size, num_targets, 2, device=device) * 50 + 20,
-                torch.rand(batch_size, num_targets, 1, device=device) * (math.pi / 2),
-            ],
-            dim=-1,
-        ),
-        "valid_mask": torch.ones(batch_size, num_targets, 1, device=device),
-    }
-
-    # Test forward and backward
-    model.train()
-    losses, cls_scores, decoded_boxes = model(test_images, test_targets)
-    losses["total"].backward()
-
-    print("Forward and backward pass successful")

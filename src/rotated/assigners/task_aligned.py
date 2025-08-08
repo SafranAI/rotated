@@ -1,10 +1,7 @@
-"""Task-aligned assigner for horizontal bounding boxes."""
-
 import torch
 
 from rotated.assigners.base import BaseTaskAlignedAssigner
 from rotated.assigners.calculators import HorizontalIoUCalculator
-from rotated.assigners.spatial import HorizontalSpatialChecker
 
 
 class TaskAlignedAssigner(BaseTaskAlignedAssigner):
@@ -32,7 +29,7 @@ class TaskAlignedAssigner(BaseTaskAlignedAssigner):
     ):
         super().__init__(
             iou_calculator=HorizontalIoUCalculator(eps=iou_eps),
-            spatial_checker=HorizontalSpatialChecker(),
+            box_format='horizontal',
             topk=topk,
             alpha=alpha,
             beta=beta,

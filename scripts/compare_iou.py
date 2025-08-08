@@ -132,6 +132,7 @@ if __name__ == "__main__":
             [50, 50, 20, 30, 0.0],  # Different rotation
             [50, 50, 15, 15, 0.0],  # Different size
             [60, 60, 40, 40, math.pi / 6],  # Translated
+            [60, 60, 40, 40, math.pi / 6],  # Translated
         ],
         device=device,
         dtype=torch.float32,

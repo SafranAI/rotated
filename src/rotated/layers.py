@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 
 
@@ -12,7 +11,7 @@ class ConvBNLayer(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        filter_size: int = 3,
+        kernel_size: int = 3,
         stride: int = 1,
         groups: int = 1,
         padding: int = 0,
@@ -24,13 +23,13 @@ class ConvBNLayer(nn.Module):
             raise ValueError(f"Input channels must be positive, got {in_channels}")
         if out_channels <= 0:
             raise ValueError(f"Output channels must be positive, got {out_channels}")
-        if filter_size <= 0:
-            raise ValueError(f"Filter size must be positive, got {filter_size}")
+        if kernel_size <= 0:
+            raise ValueError(f"Kernel size must be positive, got {kernel_size}")
 
         self.conv = nn.Conv2d(
             in_channels=in_channels,
             out_channels=out_channels,
-            kernel_size=filter_size,
+            kernel_size=kernel_size,
             stride=stride,
             padding=padding,
             groups=groups,
@@ -54,33 +53,9 @@ class ConvBNLayer(nn.Module):
             raise NotImplementedError(f"Activation {act} not implemented")
         return activation_map[act]
 
-    def forward(self, x):
+    def forward(self, input_tensor):
         """Forward pass through conv-bn-activation sequence."""
-        x = self.conv(x)
-        x = self.bn(x)
-        x = self.act(x)
-        return x
-
-
-if __name__ == "__main__":
-    import torch
-
-    print("Testing ConvBNLayer")
-
-    # Test basic functionality
-    layer = ConvBNLayer(in_channels=3, out_channels=64, filter_size=3, padding=1, act="swish")
-    test_input = torch.randn(1, 3, 224, 224)
-
-    with torch.no_grad():
-        output = layer(test_input)
-
-    assert output.shape == (1, 64, 224, 224), f"Expected (1, 64, 224, 224), got {output.shape}"
-
-    # Test all activations
-    activations = ["swish", "leaky", "relu", "gelu", "hardsigmoid", None]
-    for act in activations:
-        layer = ConvBNLayer(in_channels=3, out_channels=16, act=act)
-        output = layer(test_input)
-        print(f"✓ Activation '{act}' works")
-
-    print("All tests passed")
+        output_tensor = self.conv(input_tensor)
+        output_tensor = self.bn(output_tensor)
+        output_tensor = self.act(output_tensor)
+        return output_tensor

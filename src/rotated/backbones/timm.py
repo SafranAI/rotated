@@ -1,5 +1,3 @@
-"""TIMM backbone wrapper for object detection."""
-
 from collections.abc import Sequence
 
 import torch
@@ -59,13 +57,13 @@ class TimmBackbone(nn.Module):
             )
 
         # Cache output channel information
-        self._out_channels = [self.feature_info[i]["num_chs"] for i in return_levels]
-        self._out_strides = [self.feature_info[i]["reduction"] for i in return_levels]
+        self._out_channels = [self.feature_info[level_idx]["num_chs"] for level_idx in return_levels]
+        self._out_strides = [self.feature_info[level_idx]["reduction"] for level_idx in return_levels]
 
-    def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
+    def forward(self, input_tensor: torch.Tensor) -> list[torch.Tensor]:
         """Extract features at specified levels."""
-        all_features = self.model(x)
-        return [all_features[i] for i in self.return_levels]
+        all_features = self.model(input_tensor)
+        return [all_features[level_idx] for level_idx in self.return_levels]
 
     @property
     def out_channels(self) -> list[int]:

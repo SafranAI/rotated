@@ -5,11 +5,12 @@ import torch.nn as nn
 class ProbIoU:
     """Probabilistic IoU for Rotated Bounding Boxes.
 
-    Computes IoU between rotated bounding boxes by treating them as
-    2D Gaussian distributions. This provides differentiable IoU computation with
-    better gradient flow compared to discrete polygon IoU.
+    Computes IoU between rotated bounding boxes by treating them as 2D Gaussian distributions.
+    This provides differentiable IoU computation with better gradient flow compared to discrete polygon IoU.
 
-    Reference: "Gaussian Bounding Boxes and Probabilistic Intersection-over-Union for Object Detection"
+    Reference:
+        "Gaussian Bounding Boxes and Probabilistic Intersection-over-Union for Object Detection"
+        Murrugarra-Llerena, Jeffri and Kirsten, Lucas N. and Zeni, Luis Felipe and Jung, Claudio R.
     """
 
     def __init__(self, eps: float = 1e-3):

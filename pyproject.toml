@@ -1,19 +1,81 @@
 [project]
 name = "rotated"
 version = "0.1.0"
-description = "Rotated object detection"
+description = "Rotated object detection models with oriented bounding boxes"
+license = "Apache-2.0"
 readme = "README.md"
+requires-python = ">=3.10"
 authors = [
     { name = "vncntcmnn", email = "vincentcamenen@gmail.com" }
 ]
-requires-python = ">=3.10"
+keywords = ["computer-vision", "rotated-detection", "object-detection", "oriented-bounding-boxes", "pytorch"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
 dependencies = [
     "numpy",
     "opencv-python-headless>=4.11.0.86",
     "shapely",
     "timm>=1.0",
-    "torch; platform_machine!='x86_64' and sys_platform!='darwin'",
-    "torchvision; platform_machine!='x86_64' and sys_platform!='darwin'",
+]
+
+[project.optional-dependencies]
+cpu = [
+    "torch>=2.0.0; platform_machine != 'x86_64' or sys_platform != 'darwin'",
+    "torchvision>=0.15.0; platform_machine != 'x86_64' or sys_platform != 'darwin'",
+]
+cu118 = [
+    "torch>=2.0.0; platform_machine != 'x86_64' or sys_platform != 'darwin'",
+    "torchvision>=0.15.0; platform_machine != 'x86_64' or sys_platform != 'darwin'",
+]
+cu124 = [
+    "torch>=2.0.0; platform_machine != 'x86_64' or sys_platform != 'darwin'",
+    "torchvision>=0.15.0; platform_machine != 'x86_64' or sys_platform != 'darwin'",
+]
+macos-x86 = [
+    "torch==2.2.0; platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "torchvision==0.17.0; platform_machine == 'x86_64' and sys_platform == 'darwin'",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.29.5",
+    "pytest>=8.4.1",
+    "ruff>=0.12.4",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cu118" },
+        { extra = "cu124" },
+        { extra = "macos-x86" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu118", extra = "cu118" },
+    { index = "pytorch-cu124", extra = "cu124" },
+    { index = "pytorch-cpu", extra = "macos-x86" },
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu118", extra = "cu118" },
+    { index = "pytorch-cu124", extra = "cu124" },
+    { index = "pytorch-cpu", extra = "macos-x86" },
 ]
 
 [[tool.uv.index]]
@@ -26,20 +88,10 @@ name = "pytorch-cu118"
 url = "https://download.pytorch.org/whl/cu118"
 explicit = true
 
-[dependency-groups]
-dev = [
-    "ipykernel>=6.29.5",
-    "pytest>=8.4.1",
-    "ruff>=0.12.4",
-]
-macos-x86 = [
-    "torch==2.2.0",
-    "torchvision==0.17.0",
-]
-macos-dev = [
-    { include-group = "dev" },
-    { include-group = "macos-x86" },
-]
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
 
 [build-system]
 requires = ["uv_build>=0.8.0,<0.9"]

@@ -1,14 +1,13 @@
-"""Clean and Readable Precise Rotated IoU Implementation.
+"""Precise Rotated IoU Implementation.
 
-Focus on code clarity and readability, especially for the Sutherland-Hodgman
-clipping algorithm which is the core of exact polygon intersection.
+Using the Sutherland-Hodgman clipping algorithm which is the core of exact polygon intersection.
 """
 
 import torch
 
 
 class PreciseRotatedIoU:
-    """Clean implementation of exact rotated IoU computation."""
+    """Exact rotated IoU computation."""
 
     def __init__(self, eps: float = 1e-12):
         self.eps = eps

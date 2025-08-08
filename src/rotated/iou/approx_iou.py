@@ -1,20 +1,24 @@
-"""Precise Rotated IoU Implementation.
+"""Rotated IoU Approximation with Sampling Strategy.
 
-Computes exact IoU between rotated bounding boxes using polygon intersection
-with the Sutherland-Hodgman clipping algorithm.
-"""
+Uses adaptive and stratified sampling to improve accuracy over uniform random sampling."""
 
 import torch
 
 
-class PreciseRotatedIoU:
-    """Exact rotated IoU computation using polygon intersection."""
+class RotatedIoUApprox:
+    """Rotated IoU approximation with sampling strategy.
 
-    def __init__(self, eps: float = 1e-12):
+    Args:
+        base_samples: Base number of samples (will be adapted per box pair)
+        eps: Small constant for numerical stability
+    """
+
+    def __init__(self, base_samples: int = 2000, eps: float = 1e-7):
+        self.base_samples = base_samples
         self.eps = eps
 
     def __call__(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
-        """Compute exact IoU between rotated boxes.
+        """Compute approximate IoU between rotated boxes.
 
         Args:
             pred_boxes: [N, 5] (x, y, w, h, angle)
@@ -23,252 +27,177 @@ class PreciseRotatedIoU:
         Returns:
             [N] IoU values
         """
-        num_boxes = pred_boxes.shape[0]
-        if num_boxes == 0:
+        N = pred_boxes.shape[0]
+        if N == 0:
             return torch.empty(0, device=pred_boxes.device, dtype=pred_boxes.dtype)
 
-        # Step 1: Filter out obviously non-overlapping boxes
-        overlap_candidates = self._find_overlap_candidates(pred_boxes, target_boxes)
-        ious = torch.zeros(num_boxes, device=pred_boxes.device, dtype=pred_boxes.dtype)
+        # Step 1: AABB filtering
+        overlap_mask = self._check_aabb_overlap(pred_boxes, target_boxes)
+        ious = torch.zeros(N, device=pred_boxes.device, dtype=pred_boxes.dtype)
 
-        if not overlap_candidates.any():
+        if not overlap_mask.any():
             return ious
 
-        # Step 2: Process only the candidates
-        candidate_indices = torch.where(overlap_candidates)[0]
-        pred_candidates = pred_boxes[candidate_indices]
-        target_candidates = target_boxes[candidate_indices]
+        # Step 2: Process overlapping candidates
+        candidates = torch.where(overlap_mask)[0]
+        pred_candidates = pred_boxes[candidates]
+        target_candidates = target_boxes[candidates]
 
-        # Step 3: Convert boxes to polygons
-        pred_polygons = self._boxes_to_polygons(pred_candidates)
-        target_polygons = self._boxes_to_polygons(target_candidates)
+        # Step 3: Sampling-based IoU
+        candidate_ious = self._improved_sampling_iou(pred_candidates, target_candidates)
+        ious[candidates] = candidate_ious
 
-        # Step 4: Compute individual polygon areas
-        pred_areas = self._compute_polygon_areas(pred_polygons)
-        target_areas = self._compute_polygon_areas(target_polygons)
-
-        # Step 5: Compute intersection areas
-        intersection_areas = self._compute_intersection_areas(pred_polygons, target_polygons)
-
-        # Step 6: Calculate IoU = intersection / union
-        union_areas = pred_areas + target_areas - intersection_areas
-        candidate_ious = self._safe_divide(intersection_areas, union_areas)
-
-        ious[candidate_indices] = candidate_ious
         return ious
 
-    def _find_overlap_candidates(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
-        """Find box pairs that might overlap using axis-aligned bounding boxes."""
-        # Extract box parameters
-        center_x1, center_y1, width1, height1, angle1 = boxes1.unbind(-1)
-        center_x2, center_y2, width2, height2, angle2 = boxes2.unbind(-1)
+    def _check_aabb_overlap(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
+        """AABB overlap check."""
+        bounds1 = self._compute_aabb_bounds(boxes1)
+        bounds2 = self._compute_aabb_bounds(boxes2)
 
-        # Compute the axis-aligned bounding box extents for boxes1
-        cos_angle1, sin_angle1 = torch.cos(angle1), torch.sin(angle1)
-        extent1_width = 0.5 * width1 * torch.abs(cos_angle1) + 0.5 * height1 * torch.abs(sin_angle1)
-        extent1_height = 0.5 * width1 * torch.abs(sin_angle1) + 0.5 * height1 * torch.abs(cos_angle1)
+        no_overlap_x = (bounds1[:, 1] < bounds2[:, 0]) | (bounds2[:, 1] < bounds1[:, 0])
+        no_overlap_y = (bounds1[:, 3] < bounds2[:, 2]) | (bounds2[:, 3] < bounds1[:, 2])
 
-        # Compute the axis-aligned bounding box extents for boxes2
-        cos_angle2, sin_angle2 = torch.cos(angle2), torch.sin(angle2)
-        extent2_width = 0.5 * width2 * torch.abs(cos_angle2) + 0.5 * height2 * torch.abs(sin_angle2)
-        extent2_height = 0.5 * width2 * torch.abs(sin_angle2) + 0.5 * height2 * torch.abs(cos_angle2)
+        return ~(no_overlap_x | no_overlap_y)
 
-        # Check if AABBs overlap
-        x_overlap = torch.abs(center_x1 - center_x2) < (extent1_width + extent2_width)
-        y_overlap = torch.abs(center_y1 - center_y2) < (extent1_height + extent2_height)
+    def _compute_aabb_bounds(self, boxes: torch.Tensor) -> torch.Tensor:
+        """Compute axis-aligned bounding box bounds."""
+        x, y, w, h, angle = boxes.unbind(-1)
+        cos_a, sin_a = torch.cos(angle), torch.sin(angle)
 
-        return x_overlap & y_overlap
+        # Half extents after rotation
+        ext_x = 0.5 * (w * torch.abs(cos_a) + h * torch.abs(sin_a))
+        ext_y = 0.5 * (w * torch.abs(sin_a) + h * torch.abs(cos_a))
 
-    def _boxes_to_polygons(self, boxes: torch.Tensor) -> torch.Tensor:
-        """Convert rotated boxes to 4-vertex polygons.
+        min_x = x - ext_x
+        max_x = x + ext_x
+        min_y = y - ext_y
+        max_y = y + ext_y
 
-        Returns: [N, 4, 2] tensor of polygon vertices (counter-clockwise)
-        """
-        center_x, center_y, width, height, angle = boxes.unbind(-1)
+        return torch.stack([min_x, max_x, min_y, max_y], dim=-1)
 
-        # Define the 4 corners of a unit box (counter-clockwise from bottom-left)
-        unit_corners = torch.tensor(
-            [
-                [-0.5, -0.5],  # bottom-left
-                [0.5, -0.5],  # bottom-right
-                [0.5, 0.5],  # top-right
-                [-0.5, 0.5],  # top-left
-            ],
-            device=boxes.device,
-            dtype=boxes.dtype,
+    def _improved_sampling_iou(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
+        """Compute IoU using sampling strategy."""
+        N = boxes1.shape[0]
+        device = boxes1.device
+
+        if N == 0:
+            return torch.empty(0, device=device, dtype=boxes1.dtype)
+
+        # Box areas
+        area1 = boxes1[:, 2] * boxes1[:, 3]
+        area2 = boxes2[:, 2] * boxes2[:, 3]
+
+        # Adaptive sample count based on box sizes
+        sample_counts = self._compute_adaptive_sample_counts(boxes1, boxes2)
+
+        # Compute intersection estimates for each box pair
+        intersection_areas = torch.zeros(N, device=device, dtype=boxes1.dtype)
+
+        for i in range(N):
+            intersection_areas[i] = self._estimate_intersection_area(boxes1[i], boxes2[i], sample_counts[i])
+
+        # Compute IoU
+        union_areas = area1 + area2 - intersection_areas
+        ious = torch.where(
+            union_areas > self.eps, intersection_areas / union_areas, torch.zeros_like(intersection_areas)
         )
 
-        # Scale corners by box dimensions
-        scaled_corners = unit_corners.unsqueeze(0) * torch.stack([width, height], dim=-1).unsqueeze(-2)
+        return torch.clamp(ious, 0.0, 1.0)
 
-        # Rotate corners
-        cos_angle, sin_angle = torch.cos(angle), torch.sin(angle)
-        x_local, y_local = scaled_corners[..., 0], scaled_corners[..., 1]
+    def _compute_adaptive_sample_counts(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
+        """Compute adaptive sample count based on box characteristics."""
+        # Simplified adaptive sampling - just scale by average area
+        area1 = boxes1[:, 2] * boxes1[:, 3]
+        area2 = boxes2[:, 2] * boxes2[:, 3]
+        avg_area = (area1 + area2) * 0.5
 
-        x_rotated = x_local * cos_angle.unsqueeze(-1) - y_local * sin_angle.unsqueeze(-1)
-        y_rotated = x_local * sin_angle.unsqueeze(-1) + y_local * cos_angle.unsqueeze(-1)
+        # Scale factor based on area (but keep it simple)
+        area_factor = torch.sqrt(avg_area / 100.0)
+        area_factor = torch.clamp(area_factor, 0.7, 1.5)
 
-        # Translate to final position
-        final_corners = torch.stack([x_rotated + center_x.unsqueeze(-1), y_rotated + center_y.unsqueeze(-1)], dim=-1)
+        sample_counts = (self.base_samples * area_factor).long()
+        sample_counts = torch.clamp(sample_counts, 1000, 4000)
 
-        return final_corners
+        return sample_counts
 
-    def _compute_polygon_areas(self, polygons: torch.Tensor) -> torch.Tensor:
-        """Compute areas using the shoelace formula.
+    def _estimate_intersection_area(self, box1: torch.Tensor, box2: torch.Tensor, num_samples: int) -> torch.Tensor:
+        """Estimate intersection area using stratified sampling."""
+        device = box1.device
+        dtype = box1.dtype
 
-        Args: polygons [N, 4, 2]
-        Returns: areas [N]
-        """
-        x_coords = polygons[..., 0]  # [N, 4]
-        y_coords = polygons[..., 1]  # [N, 4]
+        # Get the intersection region bounds
+        bounds1 = self._compute_single_box_bounds(box1)
+        bounds2 = self._compute_single_box_bounds(box2)
 
-        # Get next vertex coordinates (with wraparound)
-        x_next = torch.roll(x_coords, -1, dims=-1)
-        y_next = torch.roll(y_coords, -1, dims=-1)
+        # Intersection bounds
+        min_x = max(bounds1[0], bounds2[0])
+        max_x = min(bounds1[1], bounds2[1])
+        min_y = max(bounds1[2], bounds2[2])
+        max_y = min(bounds1[3], bounds2[3])
 
-        # Shoelace formula: 0.5 * |sum(x_i * y_{i+1} - x_{i+1} * y_i)|
-        cross_products = x_coords * y_next - x_next * y_coords
-        areas = 0.5 * torch.abs(cross_products.sum(dim=-1))
+        if max_x <= min_x or max_y <= min_y:
+            return torch.zeros(1, device=device, dtype=dtype).squeeze()
 
-        return areas
+        # Simpler stratified sampling - use reasonable grid size
+        grid_size = min(int((num_samples / 100) ** 0.5), 20)  # Cap at 20x20 grid
+        grid_size = max(grid_size, 4)
 
-    def _compute_intersection_areas(self, polygons1: torch.Tensor, polygons2: torch.Tensor) -> torch.Tensor:
-        """Compute intersection areas for pairs of polygons."""
-        num_boxes = polygons1.shape[0]
-        intersection_areas = torch.zeros(num_boxes, device=polygons1.device, dtype=polygons1.dtype)
+        total_samples = grid_size * grid_size * 4  # 4 samples per cell
 
-        # Process each polygon pair individually
-        for idx in range(num_boxes):
-            clipped_polygon = self._clip_polygon_by_polygon(polygons1[idx], polygons2[idx])
+        # Create grid coordinates
+        i_coords = torch.arange(grid_size, device=device, dtype=dtype).repeat_interleave(grid_size * 4)
+        j_coords = torch.arange(grid_size, device=device, dtype=dtype).repeat(grid_size).repeat_interleave(4)
 
-            if clipped_polygon.shape[0] >= 3:  # Valid polygon needs at least 3 vertices
-                area = self._compute_polygon_areas(clipped_polygon.unsqueeze(0)).squeeze(0)
-                intersection_areas[idx] = area
+        # Random offsets within each cell
+        rand_offsets = torch.rand(total_samples, 2, device=device, dtype=dtype)
 
-        return intersection_areas
+        # Compute sample coordinates
+        cell_width = (max_x - min_x) / grid_size
+        cell_height = (max_y - min_y) / grid_size
 
-    def _clip_polygon_by_polygon(self, subject_polygon: torch.Tensor, clip_polygon: torch.Tensor) -> torch.Tensor:
-        """Clip subject polygon by clip polygon using Sutherland-Hodgman algorithm.
+        samples_x = min_x + (i_coords + rand_offsets[:, 0]) * cell_width
+        samples_y = min_y + (j_coords + rand_offsets[:, 1]) * cell_height
+        samples = torch.stack([samples_x, samples_y], dim=-1)
 
-        The algorithm works by clipping the subject polygon against each edge of the
-        clipping polygon one by one.
+        # Check if samples are in both boxes
+        in_box1 = self._point_in_rotated_box(samples, box1)
+        in_box2 = self._point_in_rotated_box(samples, box2)
 
-        Args:
-            subject_polygon: [4, 2] vertices of polygon to be clipped
-            clip_polygon: [4, 2] vertices of clipping polygon
+        intersection_count = (in_box1 & in_box2).sum().float()
 
-        Returns:
-            [K, 2] vertices of clipped polygon (K can be 0 if no intersection)
-        """
-        current_polygon = subject_polygon
+        # Estimate intersection area
+        sampling_region_area = (max_x - min_x) * (max_y - min_y)
+        intersection_area = (intersection_count / total_samples) * sampling_region_area
 
-        # Clip against each of the 4 edges of the clipping polygon
-        for edge_index in range(4):
-            if current_polygon.shape[0] == 0:
-                break  # No vertices left, completely clipped
+        return intersection_area
 
-            # Define the current clipping edge
-            edge_start = clip_polygon[edge_index]
-            edge_end = clip_polygon[(edge_index + 1) % 4]
+    def _compute_single_box_bounds(self, box: torch.Tensor) -> tuple:
+        """Compute AABB bounds for a single box."""
+        x, y, w, h, angle = box
+        cos_a, sin_a = torch.cos(angle), torch.sin(angle)
 
-            # Clip current polygon by this edge
-            current_polygon = self._clip_polygon_by_edge(current_polygon, edge_start, edge_end)
+        ext_x = 0.5 * (w * torch.abs(cos_a) + h * torch.abs(sin_a))
+        ext_y = 0.5 * (w * torch.abs(sin_a) + h * torch.abs(cos_a))
 
-        return current_polygon
+        return (x - ext_x).item(), (x + ext_x).item(), (y - ext_y).item(), (y + ext_y).item()
 
-    def _clip_polygon_by_edge(
-        self, polygon: torch.Tensor, edge_start: torch.Tensor, edge_end: torch.Tensor
-    ) -> torch.Tensor:
-        """Clip polygon by a single edge using Sutherland-Hodgman algorithm.
+    def _point_in_rotated_box(self, points: torch.Tensor, box: torch.Tensor) -> torch.Tensor:
+        """Check if points are inside a rotated box."""
+        x, y, w, h, angle = box
 
-        For each edge of the input polygon:
-        - If both vertices are inside: keep the second vertex
-        - If first inside, second outside: keep intersection point
-        - If first outside, second inside: keep intersection + second vertex
-        - If both outside: keep nothing
-        """
-        if polygon.shape[0] == 0:
-            return polygon
+        # Transform points to box-local coordinates
+        local_points = points - torch.stack([x, y])
 
-        output_vertices = []
+        # Rotate points to align with box axes
+        cos_a = torch.cos(-angle)
+        sin_a = torch.sin(-angle)
 
-        # Process each edge of the input polygon
-        for vertex_idx in range(polygon.shape[0]):
-            current_vertex = polygon[vertex_idx]
-            previous_vertex = polygon[vertex_idx - 1]  # -1 wraps to last vertex
+        rotated_x = local_points[:, 0] * cos_a - local_points[:, 1] * sin_a
+        rotated_y = local_points[:, 0] * sin_a + local_points[:, 1] * cos_a
 
-            current_inside = self._is_vertex_inside_edge(current_vertex, edge_start, edge_end)
-            previous_inside = self._is_vertex_inside_edge(previous_vertex, edge_start, edge_end)
+        # Check if within box bounds
+        half_w, half_h = w * 0.5, h * 0.5
+        inside_x = torch.abs(rotated_x) <= half_w
+        inside_y = torch.abs(rotated_y) <= half_h
 
-            if current_inside:
-                if not previous_inside:
-                    # Entering the inside region: add intersection point
-                    intersection = self._compute_line_intersection(
-                        previous_vertex, current_vertex, edge_start, edge_end
-                    )
-                    if intersection is not None:
-                        output_vertices.append(intersection)
-
-                # Current vertex is inside: always add it
-                output_vertices.append(current_vertex)
-
-            elif previous_inside:
-                # Leaving the inside region: add intersection point only
-                intersection = self._compute_line_intersection(previous_vertex, current_vertex, edge_start, edge_end)
-                if intersection is not None:
-                    output_vertices.append(intersection)
-
-        # Convert list back to tensor
-        if output_vertices:
-            return torch.stack(output_vertices)
-        else:
-            return torch.zeros(0, 2, device=polygon.device, dtype=polygon.dtype)
-
-    def _is_vertex_inside_edge(self, vertex: torch.Tensor, edge_start: torch.Tensor, edge_end: torch.Tensor) -> bool:
-        """Check if vertex is on the inside (left) side of a directed edge.
-
-        Uses the cross product to determine which side of the line the point is on.
-        Positive cross product means the point is to the left (inside).
-        """
-        edge_vector = edge_end - edge_start
-        vertex_vector = vertex - edge_start
-
-        # 2D cross product: edge_vector × vertex_vector
-        cross_product = edge_vector[0] * vertex_vector[1] - edge_vector[1] * vertex_vector[0]
-
-        return cross_product >= -self.eps  # Allow small numerical errors
-
-    def _compute_line_intersection(
-        self, point1: torch.Tensor, point2: torch.Tensor, point3: torch.Tensor, point4: torch.Tensor
-    ):
-        """Compute intersection point of two line segments.
-
-        Line 1: point1 -> point2
-        Line 2: point3 -> point4
-
-        Returns intersection point or None if lines are parallel.
-        """
-        line1_direction = point2 - point1
-        line2_direction = point4 - point3
-
-        # Check if lines are parallel using cross product
-        cross_product = line1_direction[0] * line2_direction[1] - line1_direction[1] * line2_direction[0]
-
-        if torch.abs(cross_product) < self.eps:
-            return None  # Lines are parallel
-
-        # Solve for intersection using parametric line equations
-        # point1 + t * line1_direction = point3 + s * line2_direction
-        start_difference = point3 - point1
-        parameter_t = (
-            start_difference[0] * line2_direction[1] - start_difference[1] * line2_direction[0]
-        ) / cross_product
-
-        intersection_point = point1 + parameter_t * line1_direction
-        return intersection_point
-
-    def _safe_divide(self, numerator: torch.Tensor, denominator: torch.Tensor) -> torch.Tensor:
-        """Safely divide, returning 0 when denominator is too small."""
-        valid_denominator = denominator > self.eps
-        result = torch.where(valid_denominator, numerator / denominator, torch.zeros_like(numerator))
-        return torch.clamp(result, 0.0, 1.0)
+        return inside_x & inside_y

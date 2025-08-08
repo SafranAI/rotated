@@ -1,3 +1,6 @@
+# Modified from PaddleDetection (https://github.com/PaddlePaddle/PaddleDetection)
+# Copyright (c) 2024 PaddlePaddle Authors. Apache 2.0 License.
+
 from collections.abc import Sequence
 
 import torch
@@ -12,7 +15,7 @@ class ConvBNLayer(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        filter_size: int = 3,
+        kernel_size: int = 3,
         stride: int = 1,
         groups: int = 1,
         padding: int = 0,
@@ -24,13 +27,13 @@ class ConvBNLayer(nn.Module):
             raise ValueError(f"Input channels must be positive, got {in_channels}")
         if out_channels <= 0:
             raise ValueError(f"Output channels must be positive, got {out_channels}")
-        if filter_size <= 0:
-            raise ValueError(f"Filter size must be positive, got {filter_size}")
+        if kernel_size <= 0:
+            raise ValueError(f"Kernel size must be positive, got {kernel_size}")
 
         self.conv = nn.Conv2d(
             in_channels=in_channels,
             out_channels=out_channels,
-            kernel_size=filter_size,
+            kernel_size=kernel_size,
             stride=stride,
             padding=padding,
             groups=groups,
@@ -52,12 +55,12 @@ class ConvBNLayer(nn.Module):
         }
         return activation_map.get(act, nn.Identity())
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
         """Forward pass through conv-bn-activation sequence."""
-        x = self.conv(x)
-        x = self.bn(x)
-        x = self.act(x)
-        return x
+        output_tensor = self.conv(input_tensor)
+        output_tensor = self.bn(output_tensor)
+        output_tensor = self.act(output_tensor)
+        return output_tensor
 
 
 class RepVggBlock(nn.Module):
@@ -93,17 +96,17 @@ class RepVggBlock(nn.Module):
         }
         return activation_map.get(act, nn.ReLU())
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
         """Forward pass with optional alpha weighting."""
         if hasattr(self, "conv"):
             # Deployed mode: single fused conv
-            y = self.conv(x)
+            output_tensor = self.conv(input_tensor)
         else:
             # Training mode: separate convs
             alpha = self.alpha if self.alpha is not None else 1.0
-            y = self.conv1(x) + alpha * self.conv2(x)
-        y = self.act(y)
-        return y
+            output_tensor = self.conv1(input_tensor) + alpha * self.conv2(input_tensor)
+        output_tensor = self.act(output_tensor)
+        return output_tensor
 
     def convert_to_deploy(self) -> None:
         """Convert to deployment mode by fusing convolutions."""
@@ -180,14 +183,14 @@ class BasicBlock(nn.Module):
         self.conv2 = RepVggBlock(out_channels, out_channels, act=act, alpha=use_alpha)
         self.shortcut = shortcut
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
         """Forward pass with optional residual connection."""
-        y = self.conv1(x)
-        y = self.conv2(y)
+        output_tensor = self.conv1(input_tensor)
+        output_tensor = self.conv2(output_tensor)
         if self.shortcut:
-            return x + y
+            return input_tensor + output_tensor
         else:
-            return y
+            return output_tensor
 
 
 class EffectiveSELayer(nn.Module):
@@ -212,11 +215,11 @@ class EffectiveSELayer(nn.Module):
         }
         return activation_map.get(act, nn.Hardsigmoid())
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
         """Apply squeeze-excitation attention mechanism."""
-        x_se = x.mean((2, 3), keepdim=True)
-        x_se = self.fc(x_se)
-        return x * self.act(x_se)
+        se_features = input_tensor.mean((2, 3), keepdim=True)
+        se_features = self.fc(se_features)
+        return input_tensor * self.act(se_features)
 
 
 class CSPResStage(nn.Module):
@@ -259,7 +262,7 @@ class CSPResStage(nn.Module):
         self.blocks = nn.Sequential(
             *[
                 BasicBlock(mid_channels // 2, mid_channels // 2, act=act, shortcut=True, use_alpha=use_alpha)
-                for i in range(num_blocks)
+                for block_idx in range(num_blocks)
             ]
         )
 
@@ -272,23 +275,23 @@ class CSPResStage(nn.Module):
         # Final output conv
         self.conv3 = ConvBNLayer(mid_channels, out_channels, 1, act=act)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
         """Forward pass through CSP stage."""
         # Optional downsampling
         if self.conv_down is not None:
-            x = self.conv_down(x)
+            input_tensor = self.conv_down(input_tensor)
 
         # CSP split and process
-        y1 = self.conv1(x)
-        y2 = self.blocks(self.conv2(x))
-        y = torch.cat([y1, y2], dim=1)
+        y1 = self.conv1(input_tensor)
+        y2 = self.blocks(self.conv2(input_tensor))
+        combined_features = torch.cat([y1, y2], dim=1)
 
         # Optional attention
         if self.attn is not None:
-            y = self.attn(y)
+            combined_features = self.attn(combined_features)
 
-        y = self.conv3(y)
-        return y
+        output_tensor = self.conv3(combined_features)
+        return output_tensor
 
 
 class CSPResNet(nn.Module):
@@ -336,7 +339,7 @@ class CSPResNet(nn.Module):
         self.return_levels = list(return_levels)
 
         # Apply multipliers and convert to lists for TorchScript compatibility
-        channels_list = [max(round(c * width_mult), 1) for c in channels]
+        channels_list = [max(round(channels_val * width_mult), 1) for channels_val in channels]
         layers_list = [max(round(layer * depth_mult), 1) for layer in layers]
 
         # Build stem
@@ -347,15 +350,15 @@ class CSPResNet(nn.Module):
         self.stages = nn.ModuleList(
             [
                 CSPResStage(
-                    channels_list[i], channels_list[i + 1], layers_list[i], stride=2, act=act, use_alpha=use_alpha
+                    channels_list[stage_idx], channels_list[stage_idx + 1], layers_list[stage_idx], stride=2, act=act, use_alpha=use_alpha
                 )
-                for i in range(num_stages)
+                for stage_idx in range(num_stages)
             ]
         )
 
         # Store output specifications
         self._out_channels = channels_list[1:]
-        self._out_strides = [4 * 2**i for i in range(num_stages)]
+        self._out_strides = [4 * 2**stage_idx for stage_idx in range(num_stages)]
 
     def _build_stem(self, base_channels: int, act: str, use_large_stem: bool) -> nn.Sequential:
         """Build the stem (initial feature extraction) layers."""
@@ -371,39 +374,27 @@ class CSPResNet(nn.Module):
                 ConvBNLayer(base_channels // 2, base_channels, 3, stride=1, padding=1, act=act),
             )
 
-    def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
+    def forward(self, input_tensor: torch.Tensor) -> list[torch.Tensor]:
         """Extract features at specified levels."""
-        x = self.stem(x)
+        features = self.stem(input_tensor)
         outs = []
 
-        for idx, stage in enumerate(self.stages):
+        for stage_idx, stage in enumerate(self.stages):
             if self.use_checkpoint and self.training:
                 # Gradient checkpointing for memory efficiency
-                x = torch.utils.checkpoint.checkpoint(stage, x, use_reentrant=False)
+                features = torch.utils.checkpoint.checkpoint(stage, features, use_reentrant=False)
             else:
-                x = stage(x)
+                features = stage(features)
 
-            if idx in self.return_levels:
-                outs.append(x)
+            if stage_idx in self.return_levels:
+                outs.append(features)
 
         return outs
 
     @property
     def out_channels(self) -> list[int]:
-        return [self._out_channels[i] for i in self.return_levels]
+        return [self._out_channels[level_idx] for level_idx in self.return_levels]
 
     @property
     def out_strides(self) -> list[int]:
-        return [self._out_strides[i] for i in self.return_levels]
-
-
-if __name__ == "__main__":
-    model = CSPResNet()
-    test_input = torch.randn(1, 3, 224, 224)
-
-    with torch.no_grad():
-        outputs = model(test_input)
-
-    print(f"Forward pass successful: {len(outputs)} features")
-    print(f"Output channels: {model.out_channels}")
-    print(f"Output strides: {model.out_strides}")
+        return [self._out_strides[level_idx] for level_idx in self.return_levels]

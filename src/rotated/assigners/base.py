@@ -1,7 +1,10 @@
-"""Base task-aligned assigner with generic assignment logic."""
+# Modified from PaddleDetection (https://github.com/PaddlePaddle/PaddleDetection)
+# Copyright (c) 2024 PaddlePaddle Authors. Apache 2.0 License.
 
 import torch
 import torch.nn as nn
+
+from rotated.boxes.utils import check_points_in_horizontal_boxes, check_points_in_rotated_boxes
 
 
 class BaseTaskAlignedAssigner(nn.Module):
@@ -17,7 +20,7 @@ class BaseTaskAlignedAssigner(nn.Module):
 
     Args:
         iou_calculator: Object that computes IoU between box pairs
-        spatial_checker: Object that checks point-in-box containment
+        box_format: Format of boxes - 'rotated' for 5D boxes or 'horizontal' for 4D boxes
         topk: Number of top candidates to select per GT object
         alpha: Exponent for classification score in alignment computation
         beta: Exponent for IoU score in alignment computation
@@ -25,15 +28,24 @@ class BaseTaskAlignedAssigner(nn.Module):
     """
 
     def __init__(
-        self, iou_calculator, spatial_checker, topk: int = 13, alpha: float = 1.0, beta: float = 6.0, eps: float = 1e-9
+        self,
+        iou_calculator,
+        box_format: str = 'rotated',
+        topk: int = 13,
+        alpha: float = 1.0,
+        beta: float = 6.0,
+        eps: float = 1e-9
     ):
         super().__init__()
         self.iou_calculator = iou_calculator
-        self.spatial_checker = spatial_checker
+        self.box_format = box_format
         self.topk = topk
         self.alpha = alpha
         self.beta = beta
         self.eps = eps
+
+        if box_format not in ['rotated', 'horizontal']:
+            raise ValueError(f"box_format must be 'rotated' or 'horizontal', got {box_format}")
 
     @torch.no_grad()
     def forward(
@@ -50,10 +62,10 @@ class BaseTaskAlignedAssigner(nn.Module):
 
         Args:
             pred_scores: [B, L, C] - Predicted classification scores after sigmoid
-            pred_boxes: [B, L, box_dim] - Predicted boxes (format depends on calculator)
+            pred_boxes: [B, L, box_dim] - Predicted boxes (format depends on `box_format)`
             anchor_points: [1, L, 2] - Anchor point coordinates
             gt_labels: [B, N, 1] - Ground truth class labels
-            gt_boxes: [B, N, box_dim] - Ground truth boxes (format depends on calculator)
+            gt_boxes: [B, N, box_dim] - Ground truth boxes (format depends on `box_format`)
             pad_gt_mask: [B, N, 1] - Valid ground truth mask
             bg_index: Background class index
 
@@ -70,25 +82,12 @@ class BaseTaskAlignedAssigner(nn.Module):
         if num_gts == 0:
             return self._empty_assignment(batch_size, num_anchors, num_classes, bg_index, pred_scores.device)
 
-        # Compute IoU matrix between all GT and predicted boxes
         iou_matrix = self._compute_iou_matrix(gt_boxes, pred_boxes)
-
-        # Check spatial containment of anchors in GT boxes
         spatial_mask = self._compute_spatial_mask(anchor_points, gt_boxes)
-
-        # Extract classification scores for GT classes
         class_scores = self._gather_class_scores(pred_scores, gt_labels)
-
-        # Compute alignment metrics
         alignment_scores = class_scores.pow(self.alpha) * iou_matrix.pow(self.beta)
-
-        # Select top-k candidates
         topk_mask = self._select_topk(alignment_scores * spatial_mask.float(), pad_gt_mask)
-
-        # Create positive mask
         positive_mask = topk_mask * spatial_mask.float() * pad_gt_mask.float()
-
-        # Resolve conflicts
         positive_mask = self._resolve_conflicts(positive_mask, iou_matrix)
 
         # Generate assignments
@@ -105,29 +104,48 @@ class BaseTaskAlignedAssigner(nn.Module):
         )
 
     def _compute_iou_matrix(self, gt_boxes: torch.Tensor, pred_boxes: torch.Tensor) -> torch.Tensor:
-        """Compute pairwise IoU matrix using the provided calculator."""
+        """Compute pairwise IoU matrix using the provided calculator.
+
+        Args:
+            gt_boxes: [B, N, box_dim] - Ground truth boxes
+            pred_boxes: [B, L, box_dim] - Predicted boxes
+
+        Returns:
+            iou_matrix: [B, N, L] - IoU between each GT and predicted box pair
+        """
         batch_size, num_gts, box_dim = gt_boxes.shape
         num_preds = pred_boxes.shape[1]
 
-        # Expand for pairwise computation
-        gt_expanded = gt_boxes.unsqueeze(2).expand(-1, -1, num_preds, -1)
-        pred_expanded = pred_boxes.unsqueeze(1).expand(-1, num_gts, -1, -1)
+        # Process each batch separately to compute IoU matrices
+        iou_matrices = []
 
-        # Flatten and compute IoU
-        gt_flat = gt_expanded.reshape(-1, box_dim)
-        pred_flat = pred_expanded.reshape(-1, box_dim)
-        iou_flat = self.iou_calculator(gt_flat, pred_flat)
+        for batch_idx in range(batch_size):
+            gt_batch = gt_boxes[batch_idx]  # [N, box_dim]
+            pred_batch = pred_boxes[batch_idx]  # [L, box_dim]
 
-        return torch.clamp(iou_flat.view(batch_size, num_gts, num_preds), max=1.0)
+            # Compute IoU matrix for this batch: [N, L]
+            iou_matrix_batch = self.iou_calculator(gt_batch, pred_batch)
+            iou_matrices.append(iou_matrix_batch)
+
+        # Stack all batch IoU matrices: [B, N, L]
+        iou_matrix = torch.stack(iou_matrices, dim=0)
+
+        return torch.clamp(iou_matrix, max=1.0)
 
     def _compute_spatial_mask(self, anchor_points: torch.Tensor, gt_boxes: torch.Tensor) -> torch.Tensor:
-        """Compute spatial containment mask using the provided checker."""
+        """Compute spatial containment mask using box format."""
         batch_size, *_ = gt_boxes.shape
+
+        # Choose spatial checking function based on box format
+        if self.box_format == 'rotated':
+            spatial_check_fn = check_points_in_rotated_boxes
+        else:  # horizontal
+            spatial_check_fn = check_points_in_horizontal_boxes
 
         # Process each batch item
         spatial_masks = []
         for b in range(batch_size):
-            mask = self.spatial_checker(anchor_points.squeeze(0), gt_boxes[b])  # [N, L]
+            mask = spatial_check_fn(anchor_points.squeeze(0), gt_boxes[b])  # [N, L]
             spatial_masks.append(mask)
 
         return torch.stack(spatial_masks, dim=0)  # [B, N, L]
@@ -254,43 +272,7 @@ class BaseTaskAlignedAssigner(nn.Module):
         """Create empty assignments when no GT objects are present."""
         assigned_labels = torch.full((batch_size, num_anchors), bg_index, dtype=torch.long, device=device)
         # Use dynamic box dimension - will be reshaped by actual usage
-        assigned_boxes = torch.zeros((batch_size, num_anchors, 5), device=device)
+        box_dim = 5 if self.box_format == 'rotated' else 4
+        assigned_boxes = torch.zeros((batch_size, num_anchors, box_dim), device=device)
         assigned_scores = torch.zeros((batch_size, num_anchors, num_classes), device=device)
         return assigned_labels, assigned_boxes, assigned_scores
-
-
-if __name__ == "__main__":
-    print("Testing BaseTaskAlignedAssigner")
-
-    from rotated.assigners.calculators import RotatedIoUCalculator
-    from rotated.assigners.spatial import RotatedSpatialChecker
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Create base assigner with rotated components
-    assigner = BaseTaskAlignedAssigner(
-        iou_calculator=RotatedIoUCalculator(), spatial_checker=RotatedSpatialChecker(), topk=9, alpha=1.0, beta=6.0
-    ).to(device)
-
-    # Test data
-    B, L, C, N = 2, 50, 10, 3
-    pred_scores = torch.rand(B, L, C, device=device)
-    pred_boxes = torch.rand(B, L, 5, device=device) * 100
-    anchor_points = torch.rand(1, L, 2, device=device) * 100
-    gt_labels = torch.randint(0, C, (B, N, 1), device=device)
-    gt_boxes = torch.rand(B, N, 5, device=device) * 100
-    pad_gt_mask = torch.ones(B, N, 1, device=device)
-    bg_index = C
-
-    # Test normal case
-    with torch.no_grad():
-        labels, boxes, scores = assigner(
-            pred_scores, pred_boxes, anchor_points, gt_labels, gt_boxes, pad_gt_mask, bg_index
-        )
-
-    print(f"Output shapes: labels{labels.shape}, boxes{boxes.shape}, scores{scores.shape}")
-
-    positive_count = (labels < bg_index).sum().item()
-    print(f"Positive assignments: {positive_count}/{B * L}")
-
-    print("Base assigner test passed!")

@@ -1,3 +1,6 @@
+# Modified from PaddleDetection (https://github.com/PaddlePaddle/PaddleDetection)
+# Copyright (c) 2024 PaddlePaddle Authors. Apache 2.0 License.
+
 from collections.abc import Sequence
 import math
 
@@ -5,6 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from rotated.boxes.decode import decode_ppyoloe_r_boxes
 from rotated.layers import ConvBNLayer
 
 
@@ -34,9 +38,9 @@ class ESEAttn(nn.Module):
 class PPYOLOERHead(nn.Module):
     """PP-YOLOE-R Detection Head with unified forward logic.
 
-    Head always outputs decoded boxes + classification scores regardless of mode.
-    Training mode: Returns loss dict from criterion
-    Inference mode: Returns (cls_scores, decoded_boxes) tuple
+    Head returns raw predictions for training and processed predictions for inference.
+    Training mode: Returns (losses, cls_logits, reg_dist)
+    Inference mode: Returns (losses, cls_scores, decoded_boxes)
     """
 
     def __init__(
@@ -179,25 +183,20 @@ class PPYOLOERHead(nn.Module):
 
     def _forward_common(
         self, feats: Sequence[torch.Tensor]
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Unified forward logic for both training and inference.
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Unified forward logic generating only raw predictions.
 
         Processes features through ESE attention and prediction heads,
-        then decodes to final format. Returns both raw and processed predictions
-        for criterion interface.
+        returning raw predictions without any post-processing.
 
         Args:
             feats: Feature maps [P3', P4', P5'] from neck
 
         Returns:
-            cls_scores: [B, N, C] - Classification scores (post-sigmoid) for assignment
-            cls_logits: [B, N, C] - Raw classification logits (pre-sigmoid) for loss
-            decoded_boxes: [B, N, 5] - Decoded rotated boxes in absolute pixels for assignment
-            raw_angles: [B, N, angle_max+1] - Raw angle logits (pre-softmax) for loss
+            cls_logits: [B, N, C] - Raw classification logits (pre-sigmoid)
+            reg_dist: [B, N, 4] - Raw distance predictions [xy_offset, wh_scale]
+            raw_angles: [B, N, angle_max+1] - Raw angle logits (pre-softmax)
         """
-        # Generate anchor points and strides
-        anchor_points, stride_tensor, _ = self._generate_anchors(feats)
-
         cls_logit_list = []
         reg_dist_list = []
         reg_angle_list = []
@@ -223,55 +222,19 @@ class PPYOLOERHead(nn.Module):
             reg_angle_list.append(reg_angle.view(feat.size(0), self.angle_max + 1, -1).transpose(1, 2))
 
         # Concatenate all FPN levels
-        cls_logits = torch.cat(cls_logit_list, dim=1)  # [B, N, C] - raw logits
+        cls_logits = torch.cat(cls_logit_list, dim=1)  # [B, N, C]
         reg_dist = torch.cat(reg_dist_list, dim=1)  # [B, N, 4]
-        raw_angles = torch.cat(reg_angle_list, dim=1)  # [B, N, angle_max+1] - raw logits
+        raw_angles = torch.cat(reg_angle_list, dim=1)  # [B, N, angle_max+1]
 
-        # Generate processed outputs
-        cls_scores = torch.sigmoid(cls_logits)  # [B, N, C] - for assignment
-        decoded_boxes = self._decode_boxes(
-            anchor_points, reg_dist, raw_angles, stride_tensor
-        )  # [B, N, 5] - for assignment
-
-        return cls_scores, cls_logits, decoded_boxes, raw_angles
-
-    def _decode_boxes(
-        self,
-        anchor_points: torch.Tensor,
-        pred_dist: torch.Tensor,
-        pred_angle: torch.Tensor,
-        stride_tensor: torch.Tensor,
-    ) -> torch.Tensor:
-        """Decode distance and angle predictions to rotated boxes.
-
-        Args:
-            anchor_points: [1, N, 2] - Anchor point coordinates
-            pred_dist: [B, N, 4] - Distance predictions [xy_offset, wh_scale]
-            pred_angle: [B, N, angle_max+1] - Angle logits
-            stride_tensor: [1, N, 1] - Stride values
-
-        Returns:
-            [B, N, 5] - Decoded rotated boxes [cx, cy, w, h, angle] in absolute pixels
-        """
-        xy_offset, wh_scale = pred_dist.split(2, dim=-1)
-
-        # Decode center coordinates and dimensions
-        centers = anchor_points + xy_offset * stride_tensor  # [B, N, 2]
-        sizes = (F.elu(wh_scale) + 1.0) * stride_tensor  # [B, N, 2]
-
-        # Decode angles using weighted sum of angle bins
-        angle_probs = F.softmax(pred_angle, dim=-1)  # [B, N, angle_max+1]
-        angles = torch.sum(angle_probs * self.angle_proj.view(1, 1, -1), dim=-1, keepdim=True)  # [B, N, 1]
-
-        return torch.cat([centers, sizes, angles], dim=-1)  # [B, N, 5]
+        return cls_logits, reg_dist, raw_angles
 
     def forward(
         self, feats: Sequence[torch.Tensor], targets: dict[str, torch.Tensor] = None
     ) -> tuple[dict[str, torch.Tensor] | None, torch.Tensor, torch.Tensor]:
-        """Unified forward pass with consistent output format.
+        """Unified forward pass with consistent API.
 
-        Always returns core predictions for inference. Optionally computes losses
-        when targets are provided, regardless of training mode.
+        Always returns decoded boxes and classification scores regardless of mode.
+        Uses raw predictions internally for criterion interface.
 
         Args:
             feats: Feature maps [P3', P4', P5'] from neck (shallow → deep)
@@ -289,24 +252,27 @@ class PPYOLOERHead(nn.Module):
         if len(feats) != len(self.fpn_strides):
             raise ValueError(f"feats length {len(feats)} must equal fpn_strides length {len(self.fpn_strides)}")
 
-        # Always generate all predictions using common logic
-        cls_scores, cls_logits, decoded_boxes, raw_angles = self._forward_common(feats)
+        # Generate raw predictions
+        cls_logits, reg_dist, raw_angles = self._forward_common(feats)
 
-        # Optionally compute losses if targets provided
+        # Generate anchor metadata
+        anchor_points, stride_tensor, _ = self._generate_anchors(feats)
+
+        cls_scores = torch.sigmoid(cls_logits)
+        decoded_boxes = decode_ppyoloe_r_boxes(
+            anchor_points, reg_dist, raw_angles, stride_tensor, self.angle_proj
+        )
+
+        # Compute losses if targets provided
         losses = None
         if targets is not None:
             if self.criterion is None:
                 raise ValueError("Criterion must be set to compute losses. Use set_criterion() or pass it to __init__")
 
-            # Generate anchor metadata for criterion
-            anchor_points, stride_tensor, _ = self._generate_anchors(feats)
-
-            # Compute losses using all predictions
             losses = self.criterion(
-                cls_scores, cls_logits, decoded_boxes, raw_angles, targets, anchor_points, stride_tensor
+                cls_logits, reg_dist, raw_angles, targets, anchor_points, stride_tensor, self.angle_proj
             )
 
-        # Always return core predictions for inference
         return losses, cls_scores, decoded_boxes
 
     def set_criterion(self, criterion: nn.Module):
@@ -321,40 +287,3 @@ class PPYOLOERHead(nn.Module):
     def clear_cache(self):
         """Clear anchor cache to free memory."""
         self._anchor_cache.clear()
-
-
-if __name__ == "__main__":
-    print("Testing PPYOLOERHead")
-
-    # Configuration
-    neck_out_channels = (192, 384, 768)  # P3', P4', P5'
-    head_strides = (8, 16, 32)  # P3, P4, P5
-    num_classes = 15
-
-    # Create head without criterion
-    head = PPYOLOERHead(in_channels=neck_out_channels, num_classes=num_classes, fpn_strides=head_strides, act="swish")
-
-    # Create test inputs
-    batch_size = 2
-    img_size = 640
-
-    test_features = [
-        torch.randn(batch_size, 192, img_size // 8, img_size // 8),  # P3'
-        torch.randn(batch_size, 384, img_size // 16, img_size // 16),  # P4'
-        torch.randn(batch_size, 768, img_size // 32, img_size // 32),  # P5'
-    ]
-
-    # Test inference mode (no targets)
-    head.eval()
-    with torch.no_grad():
-        losses, cls_scores, decoded_boxes = head(test_features)
-
-    # Verify inference outputs
-    assert losses is None, "Losses should be None in inference mode"
-
-    # Verify anchor count
-    expected_anchors = sum((img_size // stride) ** 2 for stride in head_strides)
-    actual_anchors = cls_scores.shape[1]
-    assert actual_anchors == expected_anchors, f"Expected {expected_anchors}, got {actual_anchors}"
-
-    print("Forward pass successful")

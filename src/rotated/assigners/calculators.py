@@ -1,5 +1,3 @@
-"""IoU calculators for different box formats."""
-
 import torch
 
 
@@ -16,7 +14,7 @@ class RotatedIoUCalculator:
         self.prob_iou = ProbIoU(eps=eps)
 
     def __call__(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
-        """Compute IoU between rotated boxes.
+        """Compute pairwise IoU matrix between two sets of rotated boxes.
 
         Args:
             boxes1: First set of rotated boxes [N, 5] - (cx, cy, w, h, angle)
@@ -25,7 +23,28 @@ class RotatedIoUCalculator:
         Returns:
             IoU matrix [N, M] with values in [0, 1]
         """
-        return self.prob_iou(boxes1, boxes2)
+        N, M = boxes1.shape[0], boxes2.shape[0]
+
+        if N == 0 or M == 0:
+            return torch.zeros(N, M, device=boxes1.device, dtype=boxes1.dtype)
+
+        # Expand for pairwise computation
+        # boxes1: [N, 1, 5] -> [N, M, 5]
+        boxes1_expanded = boxes1.unsqueeze(1).expand(-1, M, -1)
+        # boxes2: [1, M, 5] -> [N, M, 5]
+        boxes2_expanded = boxes2.unsqueeze(0).expand(N, -1, -1)
+
+        # Flatten for element-wise computation: [N*M, 5]
+        boxes1_flat = boxes1_expanded.reshape(-1, 5)
+        boxes2_flat = boxes2_expanded.reshape(-1, 5)
+
+        # Compute element-wise IoU: [N*M]
+        iou_flat = self.prob_iou(boxes1_flat, boxes2_flat)
+
+        # Reshape back to matrix: [N, M]
+        iou_matrix = iou_flat.view(N, M)
+
+        return iou_matrix
 
 
 class HorizontalIoUCalculator:
@@ -39,7 +58,7 @@ class HorizontalIoUCalculator:
         self.eps = eps
 
     def __call__(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
-        """Compute IoU between horizontal boxes.
+        """Compute pairwise IoU matrix between two sets of horizontal boxes.
 
         Args:
             boxes1: First set of boxes [N, 4] - (cx, cy, w, h)
@@ -48,6 +67,11 @@ class HorizontalIoUCalculator:
         Returns:
             IoU matrix [N, M] with values in [0, 1]
         """
+        N, M = boxes1.shape[0], boxes2.shape[0]
+
+        if N == 0 or M == 0:
+            return torch.zeros(N, M, device=boxes1.device, dtype=boxes1.dtype)
+
         boxes1_xyxy = self._cxcywh_to_xyxy(boxes1)
         boxes2_xyxy = self._cxcywh_to_xyxy(boxes2)
 
@@ -107,3 +131,16 @@ if __name__ == "__main__":
     # Test identical boxes (should be 1.0)
     identical_iou = horizontal_calc(h_boxes1[:1], h_boxes1[:1])
     print(f"Identical boxes IoU: {identical_iou.item():.6f}")
+
+    # Test empty cases
+    empty_boxes = torch.empty(0, 5, device=device)
+    non_empty_boxes = torch.tensor([[50, 50, 30, 20, 0.0]], device=device)
+
+    empty_iou = rotated_calc(empty_boxes, non_empty_boxes)
+    print(f"Empty vs non-empty IoU shape: {empty_iou.shape}")
+
+    # Test different sizes
+    boxes_3 = torch.tensor([[30, 30, 20, 15, 0.0], [70, 70, 25, 18, 0.5], [110, 110, 30, 20, 1.0]], device=device)
+    mixed_iou = rotated_calc(boxes1, boxes_3)  # [2, 3] matrix
+    print(f"Mixed size IoU matrix shape: {mixed_iou.shape}")
+    print(f"Mixed size IoU matrix:\n{mixed_iou}")
