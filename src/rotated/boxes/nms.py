@@ -26,27 +26,16 @@ def rotated_nms(boxes: torch.Tensor, scores: torch.Tensor, iou_threshold: float)
 
     iou_calculator = PreciseRotatedIoU()
     _, order = torch.sort(scores, descending=True)
-    keep_indices = []
+    # first box is always kept
+    keep_indices = [order[0]]
 
-    for i in range(boxes.size(0)):
+    for i in range(1, boxes.size(0)):
         box_idx = order[i]
-        should_keep = True
         current_box = boxes[box_idx : box_idx + 1]
 
-        for j in range(len(keep_indices)):
-            kept_idx = keep_indices[j]
-            kept_box = boxes[kept_idx : kept_idx + 1]
-            iou = iou_calculator(current_box, kept_box).item()
-
-            if iou > iou_threshold:
-                should_keep = False
-                break
-
-        if should_keep:
+        ious = iou_calculator(current_box, boxes[keep_indices, ...])
+        if not (ious > iou_threshold).any():
             keep_indices.append(box_idx)
-
-    if len(keep_indices) == 0:
-        return torch.empty((0,), dtype=torch.int64, device=boxes.device)
 
     return torch.stack(keep_indices)
 
@@ -66,7 +55,7 @@ def _multiclass_nms_coordinate_trick(
     max_radius = torch.sqrt(w**2 + h**2).max() / 2.0
     max_coord = torch.max(cx.max(), cy.max())
     offset_scale = (max_coord + max_radius) * 2.0 + 1.0
-    offsets = labels.to(boxes.dtype) * offset_scale
+    offsets = labels.to(boxes.device, dtype=boxes.dtype) * offset_scale
 
     boxes_for_nms = boxes.clone()
     boxes_for_nms[:, 0] += offsets
@@ -110,8 +99,8 @@ def _multiclass_nms_vanilla(
             _, sort_order = scores[keep_indices].sort(descending=True)
             keep_indices = keep_indices[sort_order]
         return keep_indices
-    else:
-        return torch.empty((0,), dtype=torch.int64, device=boxes.device)
+
+    return torch.empty((0,), dtype=torch.int64, device=boxes.device)
 
 
 @torch.jit.script_if_tracing
