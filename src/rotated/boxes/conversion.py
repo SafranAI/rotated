@@ -74,8 +74,7 @@ def opencv_format_to_corners(obb_tensor: torch.Tensor) -> torch.Tensor:
         bottom-left, bottom-right, top-right, top-left corners.
     """
     # Extract components
-    center_x = obb_tensor[..., 0]
-    center_y = obb_tensor[..., 1]
+    center_xy = obb_tensor[..., :2].unsqueeze(-2)
     width = obb_tensor[..., 2]
     height = obb_tensor[..., 3]
     angle_deg = obb_tensor[..., 4]
@@ -108,8 +107,7 @@ def opencv_format_to_corners(obb_tensor: torch.Tensor) -> torch.Tensor:
     corners_rotated = torch.matmul(corners_local, rotation_matrix.transpose(-2, -1))
 
     # Translate to final position
-    center = torch.stack([center_x, center_y], dim=-1).unsqueeze(-2)  # (..., 1, 2)
-    corners_global = corners_rotated + center
+    corners_global = corners_rotated + center_xy
 
     # Flatten to 8 coordinates: (..., 4, 2) -> (..., 8)
     corners_flattened = corners_global.reshape(*corners_global.shape[:-2], 8)
@@ -133,8 +131,6 @@ def opencv_to_standard_format(obb_tensor: torch.Tensor) -> torch.Tensor:
         [center_x, center_y, width, height, angle_rad]
         where angle_rad is in range [-π/2, π/2] radians.
     """
-    center_x = obb_tensor[..., 0]
-    center_y = obb_tensor[..., 1]
     width = obb_tensor[..., 2]
     height = obb_tensor[..., 3]
     opencv_angle_deg = obb_tensor[..., 4]
@@ -150,12 +146,9 @@ def opencv_to_standard_format(obb_tensor: torch.Tensor) -> torch.Tensor:
     )
 
     # Convert to radians
-    angle_rad = torch.deg2rad(standard_angle_deg)
+    obb_tensor[..., 4] = torch.deg2rad(standard_angle_deg)
 
-    # Stack results
-    result = torch.stack([center_x, center_y, width, height, angle_rad], dim=-1)
-
-    return result
+    return obb_tensor
 
 
 def corners_to_standard_format(corners_tensor: torch.Tensor) -> torch.Tensor:
@@ -194,8 +187,7 @@ def corners_to_standard_format(corners_tensor: torch.Tensor) -> torch.Tensor:
 
     # Normalize angle to [-π/2, π/2] range
     # Use modular arithmetic to handle the wrapping
-    pi = torch.tensor(np.pi, dtype=angle_rad.dtype, device=angle_rad.device)
-    angle_rad = torch.remainder(angle_rad + pi / 2, pi) - pi / 2
+    angle_rad = torch.remainder(angle_rad + torch.pi / 2, torch.pi) - torch.pi / 2
 
     # Stack results
     result = torch.stack([center_x, center_y, width, height, angle_rad], dim=-1)
