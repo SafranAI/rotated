@@ -129,6 +129,8 @@ def multiclass_rotated_nms(
     return _multiclass_nms_coordinate_trick(boxes, scores, labels, iou_threshold)
 
 
+# NOTE: what is the use for this ? I dont see how it is processing multiple samples in parallel.
+# What's the difference with `postprocess_detections`, which seems more complete.
 @torch.jit.script_if_tracing
 def batched_multiclass_rotated_nms(
     boxes: torch.Tensor,
@@ -230,6 +232,7 @@ def postprocess_detections(
         output_labels = torch.full((batch_size, detections_per_img), -1, device=device, dtype=labels.dtype)
         output_scores = torch.zeros((batch_size, detections_per_img), device=device, dtype=scores.dtype)
 
+        # NOTE: I dont know if it would be possible to vectorize this (or parallelize) ?
         for batch_idx in range(batch_size):
             sample_boxes, sample_labels, sample_scores = _postprocess_single_sample(
                 boxes[batch_idx],
