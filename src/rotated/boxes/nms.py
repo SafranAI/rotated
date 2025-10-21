@@ -24,31 +24,37 @@ def rotated_nms(boxes: torch.Tensor, scores: torch.Tensor, iou_threshold: float)
     if boxes.numel() == 0:
         return torch.empty((0,), dtype=torch.int64, device=boxes.device)
 
-    iou_calculator = PreciseRotatedIoU()
     _, order = torch.sort(scores, descending=True)
-    keep_indices = []
+    keep_mask = torch.ones(boxes.size(0), dtype=torch.bool, device=boxes.device)
+
+    iou_calculator = PreciseRotatedIoU()
 
     for i in range(boxes.size(0)):
-        box_idx = order[i]
-        should_keep = True
-        current_box = boxes[box_idx : box_idx + 1]
+        if not keep_mask[order[i]]:
+            continue
 
-        for j in range(len(keep_indices)):
-            kept_idx = keep_indices[j]
-            kept_box = boxes[kept_idx : kept_idx + 1]
-            iou = iou_calculator(current_box, kept_box).item()
+        # Get current box
+        current_idx = order[i]
+        current_box = boxes[current_idx : current_idx + 1]
 
-            if iou > iou_threshold:
-                should_keep = False
-                break
+        # Get all remaining boxes that haven't been suppressed yet
+        remaining_indices = order[i + 1 :]
+        remaining_mask = keep_mask[remaining_indices]
 
-        if should_keep:
-            keep_indices.append(box_idx)
+        if not remaining_mask.any():
+            break
 
-    if len(keep_indices) == 0:
-        return torch.empty((0,), dtype=torch.int64, device=boxes.device)
+        remaining_boxes = boxes[remaining_indices[remaining_mask]]
+        current_boxes_expanded = current_box.expand(remaining_boxes.size(0), -1)
 
-    return torch.stack(keep_indices)
+        ious = iou_calculator(current_boxes_expanded, remaining_boxes)
+
+        # Suppress boxes with IoU > threshold
+        suppress_mask = ious > iou_threshold
+        remaining_indices_to_suppress = remaining_indices[remaining_mask][suppress_mask]
+        keep_mask[remaining_indices_to_suppress] = False
+
+    return order[keep_mask[order]]
 
 
 @torch.jit.script_if_tracing
@@ -104,14 +110,14 @@ def _multiclass_nms_vanilla(
             original_indices = class_indices[class_keep]
             all_keep_indices.append(original_indices)
 
-    if all_keep_indices:
-        keep_indices = torch.cat(all_keep_indices)
-        if keep_indices.size(0) > 1:
-            _, sort_order = scores[keep_indices].sort(descending=True)
-            keep_indices = keep_indices[sort_order]
-        return keep_indices
-    else:
+    if not all_keep_indices:
         return torch.empty((0,), dtype=torch.int64, device=boxes.device)
+
+    keep_indices = torch.cat(all_keep_indices)
+
+    # Sort by score descending
+    _, sort_order = scores[keep_indices].sort(descending=True)
+    return keep_indices[sort_order]
 
 
 @torch.jit.script_if_tracing
@@ -125,6 +131,10 @@ def multiclass_rotated_nms(
 
     Performs NMS separately for each class to prevent cross-class suppression.
     Automatically selects the most efficient algorithm based on input size.
+
+    Algorithm selection:
+    - Coordinate offset trick for N <= 20,000 (faster for moderate sizes)
+    - Per-class processing for N > 20,000 (avoids numerical issues with large offsets)
 
     Args:
         boxes: Rotated boxes [N, 5] format [cx, cy, w, h, angle]
@@ -151,6 +161,7 @@ def batched_multiclass_rotated_nms(
     """Batched multi-class NMS with consistent output shapes.
 
     Processes multiple samples in parallel and returns padded outputs for consistent tensor shapes across the batch.
+    Note: This function filters boxes with scores <= 0.0.
 
     Args:
         boxes: Batched boxes [B, N, 5]
@@ -171,6 +182,7 @@ def batched_multiclass_rotated_nms(
         batch_scores = scores[batch_idx]
         batch_labels = labels[batch_idx]
 
+        # Filter meaningful scores
         valid_mask = batch_scores > 0.0
 
         if valid_mask.any():
@@ -232,31 +244,16 @@ def postprocess_detections(
             topk_candidates=topk_candidates,
         )
     elif boxes.dim() == 3:
-        # Batched case - process each sample and stack results
-        batch_size = boxes.size(0)
-        device = boxes.device
-
-        # Pre-allocate output tensors for TorchScript compatibility
-        output_boxes = torch.zeros((batch_size, detections_per_img, 5), device=device, dtype=boxes.dtype)
-        output_labels = torch.full((batch_size, detections_per_img), -1, device=device, dtype=labels.dtype)
-        output_scores = torch.zeros((batch_size, detections_per_img), device=device, dtype=scores.dtype)
-
-        for batch_idx in range(batch_size):
-            sample_boxes, sample_labels, sample_scores = _postprocess_single_sample(
-                boxes[batch_idx],
-                scores[batch_idx],
-                labels[batch_idx],
-                score_thresh=score_thresh,
-                nms_thresh=nms_thresh,
-                detections_per_img=detections_per_img,
-                topk_candidates=topk_candidates,
-            )
-
-            output_boxes[batch_idx] = sample_boxes
-            output_labels[batch_idx] = sample_labels
-            output_scores[batch_idx] = sample_scores
-
-        return output_boxes, output_labels, output_scores
+        # Batched case
+        return _postprocess_batched_samples(
+            boxes,
+            scores,
+            labels,
+            score_thresh=score_thresh,
+            nms_thresh=nms_thresh,
+            detections_per_img=detections_per_img,
+            topk_candidates=topk_candidates,
+        )
     else:
         raise ValueError(f"Expected 2D or 3D input, got {boxes.dim()}D")
 
@@ -315,5 +312,70 @@ def _postprocess_single_sample(
     output_boxes[:num_final] = final_boxes
     output_labels[:num_final] = final_labels
     output_scores[:num_final] = final_scores
+
+    return output_boxes, output_labels, output_scores
+
+
+@torch.jit.script_if_tracing
+def _postprocess_batched_samples(
+    boxes: torch.Tensor,
+    scores: torch.Tensor,
+    labels: torch.Tensor,
+    score_thresh: float,
+    nms_thresh: float,
+    detections_per_img: int,
+    topk_candidates: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Apply post-processing to batched samples using batched NMS."""
+    batch_size = boxes.size(0)
+    device = boxes.device
+
+    # Pre-allocate output tensors
+    output_boxes = torch.zeros((batch_size, detections_per_img, 5), device=device, dtype=boxes.dtype)
+    output_labels = torch.full((batch_size, detections_per_img), -1, device=device, dtype=labels.dtype)
+    output_scores = torch.zeros((batch_size, detections_per_img), device=device, dtype=scores.dtype)
+
+    # Step 1 & 2: Apply score filtering and topk selection (vectorized per batch)
+    max_boxes = boxes.size(1)
+    filtered_boxes = torch.zeros((batch_size, max_boxes, 5), device=device, dtype=boxes.dtype)
+    filtered_scores = torch.zeros((batch_size, max_boxes), device=device, dtype=scores.dtype)
+    filtered_labels = torch.zeros((batch_size, max_boxes), device=device, dtype=labels.dtype)
+
+    for batch_idx in range(batch_size):
+        # Score filtering
+        keep_mask = scores[batch_idx] > score_thresh
+        if not keep_mask.any():
+            continue
+
+        batch_filtered_scores = scores[batch_idx][keep_mask]
+        batch_filtered_boxes = boxes[batch_idx][keep_mask]
+        batch_filtered_labels = labels[batch_idx][keep_mask]
+
+        # Topk selection
+        num_filtered = batch_filtered_scores.size(0)
+        if num_filtered > topk_candidates:
+            top_scores, top_idxs = batch_filtered_scores.topk(topk_candidates)
+            batch_filtered_scores = top_scores
+            batch_filtered_boxes = batch_filtered_boxes[top_idxs]
+            batch_filtered_labels = batch_filtered_labels[top_idxs]
+            num_filtered = topk_candidates
+
+        filtered_boxes[batch_idx, :num_filtered] = batch_filtered_boxes
+        filtered_scores[batch_idx, :num_filtered] = batch_filtered_scores
+        filtered_labels[batch_idx, :num_filtered] = batch_filtered_labels
+
+    # Step 3: Batched NMS
+    nms_keep_indices = batched_multiclass_rotated_nms(
+        filtered_boxes, filtered_scores, filtered_labels, nms_thresh, max_output_per_batch=detections_per_img
+    )
+
+    # Step 4: Extract final detections from NMS results
+    for batch_idx in range(batch_size):
+        valid_indices = nms_keep_indices[batch_idx][nms_keep_indices[batch_idx] >= 0]
+        if valid_indices.numel() > 0:
+            num_keep = min(valid_indices.size(0), detections_per_img)
+            output_boxes[batch_idx, :num_keep] = filtered_boxes[batch_idx][valid_indices[:num_keep]]
+            output_labels[batch_idx, :num_keep] = filtered_labels[batch_idx][valid_indices[:num_keep]]
+            output_scores[batch_idx, :num_keep] = filtered_scores[batch_idx][valid_indices[:num_keep]]
 
     return output_boxes, output_labels, output_scores
