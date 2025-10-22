@@ -1,14 +1,12 @@
 """Rotated IoU Approximation with Sampling Strategy.
 
 Uses adaptive and stratified sampling to improve accuracy over uniform random sampling."""
-# NOTE: add reference (paper, blog, code?) for this (if there is any)
 
 import torch
 
 
 class ApproxRotatedIoU:
     """Rotated IoU approximation with sampling strategy.
-    # NOTE: add description of the general idea in the dosctring
 
     Args:
         base_samples: Base number of samples (will be adapted per box pair)

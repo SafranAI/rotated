@@ -121,6 +121,10 @@ if __name__ == "__main__":
             [50, 50, 20, 30, math.pi / 2],  # 90-degree rotation
             [50, 50, 10, 10, 0.0],  # Small square
             [50, 50, 40, 40, math.pi / 6],  # Large rotated square
+            [11, 17, 123, 82, -math.pi / 6],  # Large rotated square, negative angle
+            [11, 17, 123, 82, -math.pi / 3],  # Large rotated square, negative angle
+            [-11, -17, 55, 31, -math.pi / 3],  # negative coords, negative angle
+            [-11, -17, 55, 31, math.pi / 3],  # negative coords, positive angle
         ],
         device=device,
         dtype=torch.float32,
@@ -133,6 +137,10 @@ if __name__ == "__main__":
             [50, 50, 20, 30, 0.0],  # Different rotation
             [50, 50, 15, 15, 0.0],  # Different size
             [60, 60, 40, 40, math.pi / 6],  # Translated
+            [7, 22, 81, 65, -math.pi / 6],  # Translated
+            [7, 22, 81, 65, -math.pi / 7],  # Different angle + translated
+            [2, -5, 48, 17, -math.pi / 2.5],  # Different angle + translated
+            [2, -10, 80, 17, -math.pi / 2.5],  # Different angle + translated
         ],
         device=device,
         dtype=torch.float32,
@@ -228,14 +236,14 @@ if __name__ == "__main__":
 
     if shapely_iou is not None:
         # Shapely timing (CPU only)
-        cpu_pred = large_pred[:100].cpu()
-        cpu_target = large_target[:100].cpu()
+        cpu_pred = large_pred.cpu()
+        cpu_target = large_target.cpu()
 
         start = time.time()
         _ = shapely_iou(cpu_pred, cpu_target)
         shapely_time = time.time() - start
 
-        print(f"Shapely IoU time (100 boxes): {shapely_time * 1000:.2f}ms")
+        print(f"Shapely IoU time (1000 boxes): {shapely_time * 1000:.2f}ms")
 
     # Test gradients (only for differentiable methods)
     print("\n--- Gradient Test ---")
