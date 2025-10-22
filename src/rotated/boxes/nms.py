@@ -232,92 +232,37 @@ def postprocess_detections(
     Raises:
         ValueError: If input tensors have incompatible dimensions
     """
-    if boxes.dim() == 2:
-        # Single sample case
-        return _postprocess_single_sample(
-            boxes,
-            scores,
-            labels,
-            score_thresh=score_thresh,
-            nms_thresh=nms_thresh,
-            detections_per_img=detections_per_img,
-            topk_candidates=topk_candidates,
-        )
-    elif boxes.dim() == 3:
-        # Batched case
-        return _postprocess_batched_samples(
-            boxes,
-            scores,
-            labels,
-            score_thresh=score_thresh,
-            nms_thresh=nms_thresh,
-            detections_per_img=detections_per_img,
-            topk_candidates=topk_candidates,
-        )
-    else:
+    # Normalize to batched format
+    is_single = boxes.dim() == 2
+    if is_single:
+        boxes = boxes.unsqueeze(0)
+        scores = scores.unsqueeze(0)
+        labels = labels.unsqueeze(0)
+    elif boxes.dim() != 3:
         raise ValueError(f"Expected 2D or 3D input, got {boxes.dim()}D")
 
+    # Process with unified logic
+    output_boxes, output_labels, output_scores = _postprocess(
+        boxes,
+        scores,
+        labels,
+        score_thresh=score_thresh,
+        nms_thresh=nms_thresh,
+        detections_per_img=detections_per_img,
+        topk_candidates=topk_candidates,
+    )
 
-@torch.jit.script_if_tracing
-def _postprocess_single_sample(
-    boxes: torch.Tensor,
-    scores: torch.Tensor,
-    labels: torch.Tensor,
-    score_thresh: float,
-    nms_thresh: float,
-    detections_per_img: int,
-    topk_candidates: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Apply post-processing to single sample and return padded output."""
-    device = boxes.device
-
-    # Initialize padded output tensors
-    output_boxes = torch.zeros((detections_per_img, 5), device=device, dtype=boxes.dtype)
-    output_labels = torch.full((detections_per_img,), -1, device=device, dtype=labels.dtype)
-    output_scores = torch.zeros((detections_per_img,), device=device, dtype=scores.dtype)
-
-    # Step 1: Remove low scoring boxes
-    keep_idxs = scores > score_thresh
-    if not keep_idxs.any():
-        return output_boxes, output_labels, output_scores
-
-    # Filter by score threshold
-    filtered_scores = scores[keep_idxs]
-    filtered_boxes = boxes[keep_idxs]
-    filtered_labels = labels[keep_idxs]
-
-    # Step 2: Keep only topk scoring predictions
-    num_detections = filtered_scores.size(0)
-    if num_detections > topk_candidates:
-        top_scores, top_idxs = filtered_scores.topk(topk_candidates)
-        filtered_scores = top_scores
-        filtered_boxes = filtered_boxes[top_idxs]
-        filtered_labels = filtered_labels[top_idxs]
-
-    # Step 3: Non-maximum suppression
-    keep = multiclass_rotated_nms(filtered_boxes, filtered_scores, filtered_labels, nms_thresh)
-    if keep.numel() == 0:
-        return output_boxes, output_labels, output_scores
-
-    # Step 4: Keep only detections_per_img best detections
-    keep = keep[:detections_per_img]
-
-    # Extract final detections
-    final_boxes = filtered_boxes[keep]
-    final_labels = filtered_labels[keep]
-    final_scores = filtered_scores[keep]
-
-    # Fill padded output with valid detections
-    num_final = final_boxes.size(0)
-    output_boxes[:num_final] = final_boxes
-    output_labels[:num_final] = final_labels
-    output_scores[:num_final] = final_scores
+    # Squeeze back if single sample
+    if is_single:
+        output_boxes = output_boxes.squeeze(0)
+        output_labels = output_labels.squeeze(0)
+        output_scores = output_scores.squeeze(0)
 
     return output_boxes, output_labels, output_scores
 
 
 @torch.jit.script_if_tracing
-def _postprocess_batched_samples(
+def _postprocess(
     boxes: torch.Tensor,
     scores: torch.Tensor,
     labels: torch.Tensor,
@@ -326,7 +271,7 @@ def _postprocess_batched_samples(
     detections_per_img: int,
     topk_candidates: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Apply post-processing to batched samples using batched NMS."""
+    """Unified post-processing logic for batched inputs."""
     batch_size = boxes.size(0)
     device = boxes.device
 
@@ -335,47 +280,41 @@ def _postprocess_batched_samples(
     output_labels = torch.full((batch_size, detections_per_img), -1, device=device, dtype=labels.dtype)
     output_scores = torch.zeros((batch_size, detections_per_img), device=device, dtype=scores.dtype)
 
-    # Step 1 & 2: Apply score filtering and topk selection (vectorized per batch)
-    max_boxes = boxes.size(1)
-    filtered_boxes = torch.zeros((batch_size, max_boxes, 5), device=device, dtype=boxes.dtype)
-    filtered_scores = torch.zeros((batch_size, max_boxes), device=device, dtype=scores.dtype)
-    filtered_labels = torch.zeros((batch_size, max_boxes), device=device, dtype=labels.dtype)
-
+    # Process each batch element
     for batch_idx in range(batch_size):
-        # Score filtering
-        keep_mask = scores[batch_idx] > score_thresh
+        batch_boxes = boxes[batch_idx]
+        batch_scores = scores[batch_idx]
+        batch_labels = labels[batch_idx]
+
+        # Step 1: Score filtering
+        keep_mask = batch_scores > score_thresh
         if not keep_mask.any():
             continue
 
-        batch_filtered_scores = scores[batch_idx][keep_mask]
-        batch_filtered_boxes = boxes[batch_idx][keep_mask]
-        batch_filtered_labels = labels[batch_idx][keep_mask]
+        filtered_scores = batch_scores[keep_mask]
+        filtered_boxes = batch_boxes[keep_mask]
+        filtered_labels = batch_labels[keep_mask]
 
-        # Topk selection
-        num_filtered = batch_filtered_scores.size(0)
+        # Step 2: Topk selection
+        num_filtered = filtered_scores.size(0)
         if num_filtered > topk_candidates:
-            top_scores, top_idxs = batch_filtered_scores.topk(topk_candidates)
-            batch_filtered_scores = top_scores
-            batch_filtered_boxes = batch_filtered_boxes[top_idxs]
-            batch_filtered_labels = batch_filtered_labels[top_idxs]
-            num_filtered = topk_candidates
+            top_scores, top_idxs = filtered_scores.topk(topk_candidates)
+            filtered_scores = top_scores
+            filtered_boxes = filtered_boxes[top_idxs]
+            filtered_labels = filtered_labels[top_idxs]
 
-        filtered_boxes[batch_idx, :num_filtered] = batch_filtered_boxes
-        filtered_scores[batch_idx, :num_filtered] = batch_filtered_scores
-        filtered_labels[batch_idx, :num_filtered] = batch_filtered_labels
+        # Step 3: NMS
+        keep_indices = multiclass_rotated_nms(filtered_boxes, filtered_scores, filtered_labels, nms_thresh)
+        if keep_indices.numel() == 0:
+            continue
 
-    # Step 3: Batched NMS
-    nms_keep_indices = batched_multiclass_rotated_nms(
-        filtered_boxes, filtered_scores, filtered_labels, nms_thresh, max_output_per_batch=detections_per_img
-    )
+        # Step 4: Limit to detections_per_img
+        keep_indices = keep_indices[:detections_per_img]
 
-    # Step 4: Extract final detections from NMS results
-    for batch_idx in range(batch_size):
-        valid_indices = nms_keep_indices[batch_idx][nms_keep_indices[batch_idx] >= 0]
-        if valid_indices.numel() > 0:
-            num_keep = min(valid_indices.size(0), detections_per_img)
-            output_boxes[batch_idx, :num_keep] = filtered_boxes[batch_idx][valid_indices[:num_keep]]
-            output_labels[batch_idx, :num_keep] = filtered_labels[batch_idx][valid_indices[:num_keep]]
-            output_scores[batch_idx, :num_keep] = filtered_scores[batch_idx][valid_indices[:num_keep]]
+        # Extract and store results
+        num_keep = keep_indices.size(0)
+        output_boxes[batch_idx, :num_keep] = filtered_boxes[keep_indices]
+        output_labels[batch_idx, :num_keep] = filtered_labels[keep_indices]
+        output_scores[batch_idx, :num_keep] = filtered_scores[keep_indices]
 
     return output_boxes, output_labels, output_scores
