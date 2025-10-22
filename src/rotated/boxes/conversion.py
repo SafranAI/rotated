@@ -57,19 +57,22 @@ def standard_to_opencv_format(
     return opencv_center[0], opencv_center[1], opencv_size[0], opencv_size[1], opencv_angle
 
 
-def opencv_format_to_corners(obb_tensor: torch.Tensor) -> torch.Tensor:
+def obb_format_to_corners(obb_tensor: torch.Tensor, degrees: bool = True, flatten: bool = True) -> torch.Tensor:
     """Convert 5-coordinate format to 8 corner coordinates.
 
     Transforms oriented bounding box representation to 4 corner points as
+    either [(x1, y1), (x2, y2), (x3, y3), (x4, y4)] or
     8 flattened coordinates [x1, y1, x2, y2, x3, y3, x4, y4].
     Works with any batch dimensions.
 
     Args:
         obb_tensor: Tensor of shape (..., 5) containing
                    [center_x, center_y, width, height, angle_deg].
+        degrees: if True, convert angle from degrees to radians
+        flatten: if True, flatten output to (..., 8) instead of (..., 4, 2)
 
     Returns:
-        Tensor of shape (..., 8) containing corner coordinates.
+        Tensor of shape (..., 4, 2)  or (..., 8) containing corner coordinates.
         Ordered as: [x1, y1, x2, y2, x3, y3, x4, y4] for
         bottom-left, bottom-right, top-right, top-left corners.
     """
@@ -78,12 +81,13 @@ def opencv_format_to_corners(obb_tensor: torch.Tensor) -> torch.Tensor:
     center_y = obb_tensor[..., 1]
     width = obb_tensor[..., 2]
     height = obb_tensor[..., 3]
-    angle_deg = obb_tensor[..., 4]
+    angle = obb_tensor[..., 4]
 
     # Convert angle to radians
-    angle_rad = torch.deg2rad(angle_deg)
-    cos_a = torch.cos(angle_rad)
-    sin_a = torch.sin(angle_rad)
+    if degrees:
+        angle = torch.deg2rad(angle)
+    cos_a = torch.cos(angle)
+    sin_a = torch.sin(angle)
 
     # Half dimensions
     w2 = width / 2
@@ -112,9 +116,10 @@ def opencv_format_to_corners(obb_tensor: torch.Tensor) -> torch.Tensor:
     corners_global = corners_rotated + center
 
     # Flatten to 8 coordinates: (..., 4, 2) -> (..., 8)
-    corners_flattened = corners_global.reshape(*corners_global.shape[:-2], 8)
+    if flatten:
+        corners_global = corners_global.reshape(*corners_global.shape[:-2], 8)
 
-    return corners_flattened
+    return corners_global
 
 
 def opencv_to_standard_format(obb_tensor: torch.Tensor) -> torch.Tensor:

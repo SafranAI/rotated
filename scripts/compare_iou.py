@@ -20,6 +20,7 @@ except ImportError:
     SHAPELY_AVAILABLE = False
 
 from rotated.iou.approx_iou import ApproxRotatedIoU
+from rotated.iou.approx_sdf import ApproxSDFL1
 from rotated.iou.precise_iou import PreciseRotatedIoU
 from rotated.iou.prob_iou import ProbIoU
 from rotated.losses.prob_iou import ProbIoULoss
@@ -105,6 +106,7 @@ if __name__ == "__main__":
     prob_iou = ProbIoU()
     approx_iou = ApproxRotatedIoU()
     precise_iou = PreciseRotatedIoU()
+    sdf_iou = ApproxSDFL1()
 
     if SHAPELY_AVAILABLE:
         shapely_iou = ShapelyIoU()
@@ -121,6 +123,11 @@ if __name__ == "__main__":
             [50, 50, 20, 30, math.pi / 2],  # 90-degree rotation
             [50, 50, 10, 10, 0.0],  # Small square
             [50, 50, 40, 40, math.pi / 6],  # Large rotated square
+            [11, 17, 123, 82, -math.pi / 6],  # Large rotated square, negative angle
+            [11, 17, 123, 82, -math.pi / 3],  # Large rotated square, negative angle
+            [-11, -17, 55, 31, -math.pi / 3],  # negative coords, negative angle
+            [-11, -17, 55, 31, math.pi / 3],  # negative coords, positive angle
+            [-9, -5, 5, 6, math.pi / 1.5],  # small box that wont intersect with target
         ],
         device=device,
         dtype=torch.float32,
@@ -133,6 +140,11 @@ if __name__ == "__main__":
             [50, 50, 20, 30, 0.0],  # Different rotation
             [50, 50, 15, 15, 0.0],  # Different size
             [60, 60, 40, 40, math.pi / 6],  # Translated
+            [7, 22, 81, 65, -math.pi / 6],  # Translated
+            [7, 22, 81, 65, -math.pi / 7],  # Different angle + translated
+            [2, -5, 48, 17, -math.pi / 2.5],  # Different angle + translated
+            [2, -10, 80, 17, -math.pi / 2.5],  # Different angle + translated
+            [10, 10, 5, 4, -math.pi / 2.5],  # no intersection with pred_box
         ],
         device=device,
         dtype=torch.float32,
@@ -156,6 +168,10 @@ if __name__ == "__main__":
         approx_ious = approx_iou(pred_boxes, target_boxes)
     print(f"Approximation IoU: {approx_ious.cpu().numpy()}")
 
+    with torch.no_grad():
+        approx_ious = sdf_iou(pred_boxes, target_boxes)
+    print(f"SDF-L1 Approximation IoU: {approx_ious.cpu().numpy()}")
+
     # Test Precise IoU
     with torch.no_grad():
         precise_ious = precise_iou(pred_boxes, target_boxes)
@@ -171,10 +187,12 @@ if __name__ == "__main__":
     print("\n--- Testing Identical Boxes ---")
     identical_prob = prob_iou(pred_boxes[:3], pred_boxes[:3])
     identical_approx = approx_iou(pred_boxes[:3], pred_boxes[:3])
+    identical_approx_sdf = sdf_iou(pred_boxes[:3], pred_boxes[:3])
     identical_precise = precise_iou(pred_boxes[:3], pred_boxes[:3])
 
     print(f"ProbIoU (identical): {identical_prob.cpu().numpy()}")
     print(f"Approximation (identical): {identical_approx.cpu().numpy()}")
+    print(f"SDF-L1 Approximation (identical): {identical_approx_sdf.cpu().numpy()}")
     print(f"Precise (identical): {identical_precise.cpu().numpy()}")
 
     if shapely_iou is not None:
@@ -187,12 +205,15 @@ if __name__ == "__main__":
         shapely_results = shapely_iou(pred_boxes, target_boxes)
         precise_results = precise_iou(pred_boxes, target_boxes)
         approx_results = approx_iou(pred_boxes, target_boxes)
+        approx_sdf_results = sdf_iou(pred_boxes, target_boxes)
 
         precise_mae = torch.mean(torch.abs(precise_results - shapely_results)).item()
         approx_mae = torch.mean(torch.abs(approx_results - shapely_results)).item()
+        approx_sdf_mae = torch.mean(torch.abs(approx_sdf_results - shapely_results)).item()
 
         print(f"Precise IoU MAE vs Shapely: {precise_mae:.6f}")
         print(f"Approximation IoU MAE vs Shapely: {approx_mae:.6f}")
+        print(f"SDF Approximation IoU MAE vs Shapely: {approx_sdf_mae:.6f}")
 
     # Performance comparison
     print("\n--- Performance Test ---")
@@ -217,6 +238,14 @@ if __name__ == "__main__":
     approx_time = (time.time() - start) / 3
 
     print(f"Approximation IoU time (1000 boxes): {approx_time * 1000:.2f}ms")
+
+    # SDF Approximation IoU timing
+    start = time.time()
+    for _ in range(3):
+        _ = sdf_iou(large_pred, large_target)
+    approx_sdf_time = (time.time() - start) / 3
+
+    print(f"SDF Approximation IoU time (1000 boxes): {approx_sdf_time * 1000:.2f}ms")
 
     # Precise IoU timing
     start = time.time()
