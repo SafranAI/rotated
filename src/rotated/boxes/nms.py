@@ -44,6 +44,9 @@ def rotated_nms(boxes: torch.Tensor, scores: torch.Tensor, iou_threshold: float)
         if not remaining_mask.any():
             break
 
+        # Filter remaining_indices to only include boxes that haven't been suppressed yet
+        # Note: keep_mask gets updated at every iteration with more False values,
+        # so we need to filter remaining_indices using the current state of keep_mask
         remaining_boxes = boxes[remaining_indices[remaining_mask]]
         current_boxes_expanded = current_box.expand(remaining_boxes.size(0), -1)
 
