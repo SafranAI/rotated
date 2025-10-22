@@ -1,0 +1,34 @@
+default_language_version:
+  python: python3.10
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-json
+      - id: check-toml
+      - id: check-symlinks
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: detect-aws-credentials
+        args:
+          - --allow-missing-credentials
+      - id: detect-private-key
+  - repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: 3b4bc031619cde2e0a9f3c4441ac7cc8227245a4  # v0.14.1
+    hooks:
+      - id: ruff-format
+        types_or: [ python, pyi ]
+      - id: ruff-check
+        types_or: [ python, pyi ]
+        args: [ --fix ]
+  - repo: https://github.com/jsh9/pydoclint
+    rev: 2ce0be5cd61489a783e7475d06c2783cfb2c557f  # 0.7.3
+    hooks:
+      - id: pydoclint
+        exclude: /tests/
+        args:
+          - --style=google
+          - --arg-type-hints-in-docstring=false
+          - --check-return-types=false
+          - --check-yield-types=false
