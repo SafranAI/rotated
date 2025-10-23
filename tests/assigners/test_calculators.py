@@ -22,6 +22,7 @@ def test_rotated_iou_calculator():
     empty_iou2 = calc(boxes1, empty_boxes)
     assert empty_iou2.shape == (2, 0)
 
+
 def test_horizontal_iou_calculator():
     """Test horizontal IoU calculator basic functionality."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
