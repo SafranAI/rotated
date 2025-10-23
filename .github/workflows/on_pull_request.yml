@@ -1,0 +1,20 @@
+name: On Pull Request (CI)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  pre-commit-check:
+    name: 🪝 Pre-commit hooks workflow
+    uses: ./.github/workflows/workflow_pre_commit_check.yml
+    secrets: inherit
+
+  python-tests-check:
+    name: 🐍×🧪 python tests
+    uses: ./.github/workflows/workflow_python_tests.yml
+    secrets: inherit
