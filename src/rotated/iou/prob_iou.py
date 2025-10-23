@@ -1,6 +1,7 @@
 import torch
 
 
+# NOTE: Very clean implementation of the paper, well done!
 class ProbIoU:
     """Probabilistic IoU for Rotated Bounding Boxes.
 
@@ -13,6 +14,7 @@ class ProbIoU:
     """
 
     def __init__(self, eps: float = 1e-3):
+        # NOTE: Can/should we use a smaller eps ? It is used in many places.
         self.eps = eps
 
     def __call__(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
@@ -73,6 +75,8 @@ class ProbIoU:
         l1_loss = torch.sqrt(1.0 - torch.exp(-bhattacharyya_distance) + self.eps)
         iou = 1.0 - l1_loss
 
+        # NOTE: might be worth clamping here just in case ?
+        # return iou.clamp(0.0, 1.0)
         return iou
 
     def _gbb_form(self, boxes: torch.Tensor) -> torch.Tensor:
@@ -81,6 +85,8 @@ class ProbIoU:
         # Convert w,h to variance: σ² = (w²/12, h²/12) for uniform distribution
         variance_a = width.pow(2) / 12.0
         variance_b = height.pow(2) / 12.0
+        # NOTE: can we just return the list of tensors (without stacking) ?
+        # Because we unbind immediatly after anyway.
         return torch.stack([center_x, center_y, variance_a, variance_b, angle], dim=-1)
 
     def _rotated_form(
@@ -92,6 +98,7 @@ class ProbIoU:
 
         cos_squared = cos_angle.pow(2)
         sin_squared = sin_angle.pow(2)
+        # NOTE: Nice! Cant remember last time I used sin(2x) = 2sin(x)cos(x) :D
         cos_sin = cos_angle * sin_angle
 
         covariance_a = variance_a * cos_squared + variance_b * sin_squared
