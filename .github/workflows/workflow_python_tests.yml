@@ -21,11 +21,14 @@ jobs:
       - name: 🌞 Install uv
         uses: astral-sh/setup-uv@2ddd2b9cb38ad8efd50337e8ab201519a34c9f24 # v7.1.1
 
-      - name: 💾 cache uv venv
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: .venv
-          key: venv-${{ hashFiles('uv.lock') }}
+      # With cache CI takes longer to run than without:
+      # With cache   : 37s (download cache) + 28s (test)
+      # without cache: 56s (test)
+      # - name: 💾 cache uv venv
+      #   uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      #   with:
+      #     path: .venv
+      #     key: venv-${{ hashFiles('uv.lock') }}
 
       - name: 🧪 Tests
         run: uv run pytest
