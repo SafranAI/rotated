@@ -22,7 +22,7 @@ def test_rotated_iou_calculator():
     empty_iou2 = calc(boxes1, empty_boxes)
     assert empty_iou2.shape == (2, 0)
 
-def fake_invalid_test():
+def test_invalid():
     assert False, "heheh"
 
 def test_horizontal_iou_calculator():
