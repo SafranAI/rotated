@@ -9,6 +9,9 @@ from rotated.boxes.conversion import obb_format_to_corners
 
 
 class ApproxSDFL1:
+    def __init__(self, n_samples: int = 100):
+        self.n_samples = n_samples
+
     def __call__(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
         N = pred_boxes.shape[0]
         if N == 0:
@@ -32,7 +35,7 @@ class ApproxSDFL1:
         pred_area = pred_candidates[:, 2] * pred_candidates[:, 3]
         target_area = target_candidates[:, 2] * target_candidates[:, 3]
 
-        a_extra = saf_obox2obox_vec(pred_candidates, target_candidates)
+        a_extra = saf_obox2obox_vec(pred_candidates, target_candidates, n_samples=self.n_samples)
         union = target_area + a_extra.float()
         ious[candidates] = (pred_area + target_area) / union - 1
         return ious
@@ -65,7 +68,7 @@ class ApproxSDFL1:
 
 
 def saf_obox2obox_vec(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_samples: int = 20) -> torch.Tensor:
-    """Vectorized implementation of Signed area difference formed between a pairs of predictions and target boxes.
+    """Vectorized implementation of Signed area difference formed between pairs of predictions and target boxes.
 
     Args:
         pred_boxes: prediction box in format (xc, yc, w, h, angle). Shape (n, 5)
