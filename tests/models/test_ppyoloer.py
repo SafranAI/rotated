@@ -34,18 +34,18 @@ def test_ppyoloer_forward_inference():
     test_images = torch.randn(batch_size, 3, img_size, img_size)
 
     with torch.no_grad():
-        losses, cls_scores, decoded_boxes = model(test_images)
+        losses, decoded_boxes, scores, labels = model(test_images)
 
     # Verify inference outputs
     assert losses is None
-    assert cls_scores.shape[0] == batch_size
     assert decoded_boxes.shape[0] == batch_size
-    assert cls_scores.shape[2] == 15  # num_classes
     assert decoded_boxes.shape[2] == 5  # [cx, cy, w, h, angle]
+    assert scores.shape[0] == batch_size
+    assert labels.shape[0] == batch_size
 
-    assert not torch.isnan(cls_scores).any()
     assert not torch.isnan(decoded_boxes).any()
-    assert torch.all(cls_scores >= 0) and torch.all(cls_scores <= 1)
+    assert not torch.isnan(scores).any()
+    assert torch.all(scores >= 0) and torch.all(scores <= 1)
 
 
 def test_ppyoloer_forward_training():
@@ -71,7 +71,7 @@ def test_ppyoloer_forward_training():
         "valid_mask": torch.ones(batch_size, num_targets, 1),
     }
 
-    losses, cls_scores, decoded_boxes = model(test_images, test_targets)
+    losses, *_ = model(test_images, test_targets)
 
     # Verify training outputs
     assert losses is not None
@@ -127,14 +127,15 @@ def test_ppyoloer_output_shapes():
 
     model.eval()
     with torch.no_grad():
-        losses, cls_scores, decoded_boxes = model(test_images)
+        _, decoded_boxes, scores, labels = model(test_images)
 
     # Calculate expected number of anchors
     fpn_strides = [8, 16, 32]
     expected_anchors = sum((img_size // stride) ** 2 for stride in fpn_strides)
 
-    assert cls_scores.shape == (batch_size, expected_anchors, 10)
     assert decoded_boxes.shape == (batch_size, expected_anchors, 5)
+    assert scores.shape == (batch_size, expected_anchors)
+    assert labels.shape == (batch_size, expected_anchors)
 
 
 class DummyBackbone(nn.Module):
@@ -189,9 +190,9 @@ def test_export_with_backbone_no_export():
 
     # Test forward still works
     x = torch.randn(1, 3, 640, 640)
-    losses, cls_scores, _ = model(x)
+    losses, _, scores, _ = model(x)
     assert losses is None
-    assert cls_scores.shape[0] == 1
+    assert scores.shape[0] == 1
 
 
 def test_export_with_backbone_export():
