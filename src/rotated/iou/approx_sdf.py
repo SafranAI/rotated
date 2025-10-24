@@ -87,33 +87,29 @@ def saf_obox2obox_vec(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_sa
     center = target_boxes[:, :2]  # (m, 2)
     cos = torch.cos(target_boxes[:, -1])  # (m, 1)
     sin = torch.sin(target_boxes[:, -1])  # (m, 1)
-    saf = torch.zeros(pred_boxes.shape[0], device=pred_boxes.device, dtype=pred_boxes.dtype)
 
-    for i1 in range(4):
-        # linearly sample n_samples points along each edge
-        i2 = (i1 + 1) % 4
-        p1 = poly[:, i1, :]
-        p2 = poly[:, i2, :]
-        pnew = p1[:, None, :] * factors1[None, :, None] + p2[:, None, :] * factors2[None, :, None]
-        pnew = pnew - center[:, None, :]  # [n, n_samples, 2]
+    # linearly sample n_samples points along each edge
+    poly_next = torch.roll(poly, -1, dims=1)  # (n, 4, 2)
+    pnew = (
+        poly[:, None, :, :] * factors1[None, :, None, None] + poly_next[:, None, :, :] * factors2[None, :, None, None]
+    )
+    pnew = pnew - center[:, None, None, :]  # (n, n_samples, 4, 2)
 
-        ppx = pnew[..., 0] * cos[:, None] + pnew[..., 1] * sin[:, None]  # (n, n_samples)
-        ppy = -pnew[..., 0] * sin[:, None] + pnew[..., 1] * cos[:, None]  # (n, n_samples)
-        ppxy = torch.stack([ppx, ppy], dim=-1)  # (n, n_samples, 2)
-        qqxy = torch.abs(ppxy) - 0.5 * target_boxes[:, None, 2:4]  # (n, n_samples, 2)
+    ppx = pnew[..., 0] * cos[:, None, None] + pnew[..., 1] * sin[:, None, None]  # (n, n_samples, 4)
+    ppy = -pnew[..., 0] * sin[:, None, None] + pnew[..., 1] * cos[:, None, None]  # (n, n_samples, 4)
+    ppxy = torch.stack([ppx, ppy], dim=-1)  # (n, n_samples, 4, 2)
+    qqxy = torch.abs(ppxy) - 0.5 * target_boxes[:, None, None, 2:4]  # (n, n_samples, 4, 2)
 
-        sign = qqxy[..., 0] > 0  # (n, n_samples)
-        zeros = torch.zeros_like(qqxy[..., 0])
-        x_comp = torch.maximum(qqxy[..., 0], zeros) * sign * torch.sign(ppxy[..., 0])  # (n, n_samples)
-        y_comp = torch.maximum(qqxy[..., 1], zeros) * (~sign) * torch.sign(ppxy[..., 1])
+    sign = qqxy[..., 0] > 0  # (n, n_samples, 4)
+    zeros = torch.zeros_like(qqxy[..., 0])
+    x_comp = torch.maximum(qqxy[..., 0], zeros) * sign * torch.sign(ppxy[..., 0])  # (n, n_samples, 4)
+    y_comp = torch.maximum(qqxy[..., 1], zeros) * (~sign) * torch.sign(ppxy[..., 1])
 
-        dx = torch.gradient(ppx, dim=-1)[0]  # (n, n_samples)
-        dy = torch.gradient(ppy, dim=-1)[0]  # (n, n_samples)
+    dx = torch.gradient(ppx, dim=1)[0]  # (n, n_samples, 4)
+    dy = torch.gradient(ppy, dim=1)[0]  # (n, n_samples, 4)
 
-        safii = x_comp * dy - y_comp * dx
-        saf = saf + safii.sum(axis=-1)
-
-    return saf
+    safii = x_comp * dy - y_comp * dx
+    return safii.sum(dim=1).sum(dim=-1)
 
 
 def pairwise_saf_obox2obox(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_samples: int = 20) -> torch.Tensor:
