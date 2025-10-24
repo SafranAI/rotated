@@ -229,8 +229,8 @@ def postprocess_detections(
         topk_candidates: Number of best detections to keep before NMS
 
     Returns:
-        For single input: (boxes, labels, scores) [detections_per_img, 5], [detections_per_img], [detections_per_img]
-        For batched input: (boxes, labels, scores) [B, detections_per_img, 5], [B, detections_per_img], [B, detections_per_img]
+        For single input: (boxes, scores, labels) [detections_per_img, 5], [detections_per_img], [detections_per_img]
+        For batched input: (boxes, scores, labels) [B, detections_per_img, 5], [B, detections_per_img], [B, detections_per_img]
 
     Raises:
         ValueError: If input tensors have incompatible dimensions
@@ -245,7 +245,7 @@ def postprocess_detections(
         raise ValueError(f"Expected 2D or 3D input, got {boxes.dim()}D")
 
     # Process with unified logic
-    output_boxes, output_labels, output_scores = _postprocess(
+    output_boxes, output_scores, output_labels = _postprocess(
         boxes,
         scores,
         labels,
@@ -258,10 +258,10 @@ def postprocess_detections(
     # Squeeze back if single sample
     if is_single:
         output_boxes = output_boxes.squeeze(0)
-        output_labels = output_labels.squeeze(0)
         output_scores = output_scores.squeeze(0)
+        output_labels = output_labels.squeeze(0)
 
-    return output_boxes, output_labels, output_scores
+    return output_boxes, output_scores, output_labels
 
 
 @torch.jit.script_if_tracing
@@ -317,7 +317,7 @@ def _postprocess(
         # Extract and store results
         num_keep = keep_indices.size(0)
         output_boxes[batch_idx, :num_keep] = filtered_boxes[keep_indices]
-        output_labels[batch_idx, :num_keep] = filtered_labels[keep_indices]
         output_scores[batch_idx, :num_keep] = filtered_scores[keep_indices]
+        output_labels[batch_idx, :num_keep] = filtered_labels[keep_indices]
 
-    return output_boxes, output_labels, output_scores
+    return output_boxes, output_scores, output_labels

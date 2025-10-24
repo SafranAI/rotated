@@ -7,26 +7,36 @@ import torch.nn as nn
 from rotated.backbones import CSPResNet
 from rotated.losses.ppyoloer_criterion import RotatedDetectionLoss
 from rotated.nn.custom_pan import CustomCSPPAN
+from rotated.nn.postprocessor import DetectionPostProcessor
 from rotated.nn.ppyoloer_head import PPYOLOERHead
 
 
 class PPYOLOER(nn.Module):
     """PP-YOLOE-R Architecture for Rotated Object Detection.
 
-    Simple composition of backbone, neck, and head components.
-    The head uses a consistent interface that always returns the same format:
-    (losses, cls_scores, decoded_boxes) where losses is None during inference.
+    Simple composition of backbone, neck, head, and optional postprocessor components.
+    The head always returns (losses, decoded_boxes, scores, labels).
+    The postprocessor optionally applies NMS for final detection output.
     """
 
-    def __init__(self, backbone: nn.Module, neck: nn.Module, head: nn.Module):
+    def __init__(
+        self,
+        backbone: nn.Module,
+        neck: nn.Module,
+        head: nn.Module,
+        postprocessor: DetectionPostProcessor | None = None,
+    ):
         super().__init__()
         self.backbone = backbone
         self.neck = neck
         self.head = head
+        self.postprocessor = postprocessor
 
     def forward(
-        self, images: torch.Tensor, targets: dict[str, torch.Tensor] = None
-    ) -> tuple[dict[str, torch.Tensor] | None, torch.Tensor, torch.Tensor]:
+        self,
+        images: torch.Tensor,
+        targets: dict[str, torch.Tensor] = None,
+    ) -> tuple[dict[str, torch.Tensor] | None, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass through the complete architecture.
 
         Args:
@@ -34,20 +44,31 @@ class PPYOLOER(nn.Module):
             targets: Training targets (optional):
                 - labels: [B, M, 1] - Class labels [0, num_classes-1]
                 - boxes: [B, M, 5] - Rotated boxes [cx, cy, w, h, angle]
-                * cx, cy: Center coordinates in absolute pixels
-                * w, h: Width and height in absolute pixels
-                * angle: Rotation angle in radians [0, π/2)
+                    * cx, cy: Center coordinates in absolute pixels
+                    * w, h: Width and height in absolute pixels
+                    * angle: Rotation angle in radians [0, π/2)
                 - valid_mask: [B, M, 1] - Valid target mask (1.0=valid, 0.0=pad)
 
         Returns:
-            Tuple of (losses, cls_scores, decoded_boxes):
+            Tuple of (losses, scores, boxes, labels):
                 - losses: Loss dictionary if targets provided, None otherwise
-                - cls_scores: [B, N, C] - Classification scores (post-sigmoid)
-                - decoded_boxes: [B, N, 5] - Decoded rotated boxes in absolute pixels
+                - boxes: [B, K, 5] or [B, N, 5] - Detection boxes (post-NMS if postprocessor set)
+                - scores: [B, K] - Detection scores (post-NMS if postprocessor set, else max class scores [B, N])
+                - labels: [B, K] or [B, N] - Detection labels (predicted class indices)
         """
         features = self.backbone(images)
         features = self.neck(features)
-        return self.head(features, targets)
+        losses, cls_scores, decoded_boxes = self.head(features, targets)
+
+        # Always extract predicted labels and max scores
+        pred_labels = torch.argmax(cls_scores, dim=-1)  # [B, N]
+        max_scores, _ = torch.max(cls_scores, dim=-1)  # [B, N]
+
+        # Apply post-processing if postprocessor exists (only during inference)
+        if self.postprocessor is not None and targets is None:
+            decoded_boxes, pred_labels, max_scores = self.postprocessor(decoded_boxes, max_scores, pred_labels)
+
+        return losses, decoded_boxes, max_scores, pred_labels
 
     def export(self) -> None:
         """Convert the model to deployment mode by reparameterizing layers if available."""
@@ -58,11 +79,12 @@ class PPYOLOER(nn.Module):
             self.backbone.export()
 
 
-def create_ppyoloer_model(num_classes: int = 15) -> PPYOLOER:
+def create_ppyoloer_model(num_classes: int = 15, postprocessor: DetectionPostProcessor | None = None) -> PPYOLOER:
     """Factory function to create a PP-YOLOE-R model with default configuration.
 
     Args:
         num_classes: Number of object classes
+        postprocessor: Optional postprocessor for inference (with configurable IoU)
 
     Returns:
         Complete PP-YOLOE-R model ready for training/inference
@@ -107,5 +129,5 @@ def create_ppyoloer_model(num_classes: int = 15) -> PPYOLOER:
     )
 
     # Compose full model
-    model = PPYOLOER(backbone, neck, head)
+    model = PPYOLOER(backbone, neck, head, postprocessor)
     return model
