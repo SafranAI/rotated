@@ -1,5 +1,6 @@
 import math
 
+import pytest
 import torch
 import torch.nn as nn
 
@@ -248,8 +249,5 @@ def test_ppyoloer_export_requires_eval():
     # Explicitly set to training mode
     model.train()
 
-    try:
+    with pytest.raises(RuntimeError, match="Model must be in eval mode before export."):
         model.export()
-        raise AssertionError("Should have raised RuntimeError")
-    except RuntimeError as e:
-        assert "eval mode" in str(e)

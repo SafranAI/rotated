@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from rotated.backbones.csp_resnet import CSPResNet
@@ -85,8 +86,5 @@ def test_csp_resnet_export_requires_eval():
     # Explicitly set to training mode
     model.train()
 
-    try:
+    with pytest.raises(RuntimeError, match="Model must be in eval mode before export."):
         model.export()
-        raise AssertionError("Should have raised RuntimeError")
-    except RuntimeError as e:
-        assert "eval mode" in str(e)
