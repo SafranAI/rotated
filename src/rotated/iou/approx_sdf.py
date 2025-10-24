@@ -109,7 +109,7 @@ def saf_obox2obox_vec(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_sa
     dy = torch.gradient(ppy, dim=1)[0]  # (n, n_samples, 4)
 
     safii = x_comp * dy - y_comp * dx
-    return safii.sum(dim=1).sum(dim=-1)
+    return safii.sum(dim=[-2, -1])
 
 
 def pairwise_saf_obox2obox(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_samples: int = 20) -> torch.Tensor:
