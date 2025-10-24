@@ -49,6 +49,14 @@ class PPYOLOER(nn.Module):
         features = self.neck(features)
         return self.head(features, targets)
 
+    def export(self) -> None:
+        """Convert the model to deployment mode by reparameterizing layers if available."""
+        if self.training:
+            raise RuntimeError("Model must be in eval mode before export. Call model.eval() first.")
+
+        if hasattr(self.backbone, "export"):
+            self.backbone.export()
+
 
 def create_ppyoloer_model(num_classes: int = 15) -> PPYOLOER:
     """Factory function to create a PP-YOLOE-R model with default configuration.
