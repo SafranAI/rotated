@@ -4,7 +4,9 @@ Compares different IoU implementations including probabilistic, approximation,
 precise geometric, and optional Shapely-based methods.
 """
 
+from dataclasses import dataclass
 import math
+import time
 
 import torch
 
@@ -14,15 +16,32 @@ try:
 
     SHAPELY_AVAILABLE = True
 except ImportError:
-    Polygon = None
-    rotate = None
-    translate = None
+    Polygon = rotate = translate = None
     SHAPELY_AVAILABLE = False
 
 from rotated.iou.approx_iou import ApproxRotatedIoU
 from rotated.iou.precise_iou import PreciseRotatedIoU
 from rotated.iou.prob_iou import ProbIoU
-from rotated.losses.prob_iou import ProbIoULoss
+from rotated.utils.seed import seed_everything
+
+
+@dataclass
+class IoUMethod:
+    """Configuration for an IoU calculation method."""
+
+    name: str
+    calculator: object
+    supports_gradients: bool = False
+    force_cpu: bool = False
+
+
+IOU_METHODS = [
+    IoUMethod("ProbIoU", ProbIoU(), supports_gradients=True),
+    IoUMethod("Approximation", ApproxRotatedIoU()),
+    IoUMethod("Precise", PreciseRotatedIoU()),
+    # Add your custom methods here, e.g.:
+    # IoUMethod("MyCustomIoU", MyCustomIoU(), supports_gradients=True),
+]
 
 
 class ShapelyIoU:
@@ -95,25 +114,107 @@ class ShapelyIoU:
         return poly
 
 
-if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+class IoUComparator:
+    """Compares different IoU implementations based on configuration."""
 
-    print("Testing Rotated IoU Implementations")
-    print("=" * 50)
+    def __init__(self, device: torch.device, methods: list[IoUMethod] = None, reference_method: str = "Shapely"):
+        self.device = device
+        self.methods = methods if methods is not None else IOU_METHODS.copy()
+        self.reference_method = reference_method
 
-    # Create calculators
-    prob_iou = ProbIoU()
-    approx_iou = ApproxRotatedIoU()
-    precise_iou = PreciseRotatedIoU()
+        # Add Shapely if available and not already in methods
+        if SHAPELY_AVAILABLE and not any(m.name == "Shapely" for m in self.methods):
+            self.methods.append(IoUMethod("Shapely", ShapelyIoU(), force_cpu=True))
 
-    if SHAPELY_AVAILABLE:
-        shapely_iou = ShapelyIoU()
-        print("✓ Shapely available for comparison")
-    else:
-        shapely_iou = None
-        print("⚠ Shapely not available - install with: pip install shapely")
+    def _prepare_tensors(
+        self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor, force_cpu: bool
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Prepare tensors for computation, moving to CPU if required."""
+        if force_cpu:
+            return pred_boxes.cpu(), target_boxes.cpu()
+        return pred_boxes, target_boxes
 
-    # Test cases
+    def compute_all(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Compute IoU using all configured methods."""
+        results = {}
+
+        for method in self.methods:
+            test_pred, test_target = self._prepare_tensors(pred_boxes, target_boxes, method.force_cpu)
+            with torch.no_grad():
+                results[method.name] = method.calculator(test_pred, test_target)
+
+        return results
+
+    def benchmark(self, batch_size: int = 1000, num_iterations: int = 10) -> dict[str, float]:
+        """Benchmark performance of all configured methods."""
+        pred_boxes = torch.rand(batch_size, 5, device=self.device) * 100
+        target_boxes = torch.rand(batch_size, 5, device=self.device) * 100
+
+        timings = {}
+
+        for method in self.methods:
+            test_pred, test_target = self._prepare_tensors(pred_boxes, target_boxes, method.force_cpu)
+
+            start = time.perf_counter()
+            for _ in range(num_iterations):
+                with torch.no_grad():
+                    _ = method.calculator(test_pred, test_target)
+            timings[method.name] = (time.perf_counter() - start) / num_iterations * 1000
+
+        return timings
+
+    def compare_accuracy(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> dict[str, float]:
+        """Compare accuracy against the configured reference method."""
+        # Find reference method
+        reference_method = None
+        for method in self.methods:
+            if method.name == self.reference_method:
+                reference_method = method
+                break
+
+        if reference_method is None:
+            return {}
+
+        # Get reference results
+        ref_pred, ref_target = self._prepare_tensors(pred_boxes, target_boxes, reference_method.force_cpu)
+        with torch.no_grad():
+            reference_results = reference_method.calculator(ref_pred, ref_target)
+
+        mae_scores = {}
+        for method in self.methods:
+            if method.name == self.reference_method:
+                continue
+
+            test_pred, test_target = self._prepare_tensors(pred_boxes, target_boxes, method.force_cpu)
+            with torch.no_grad():
+                results = method.calculator(test_pred, test_target)
+
+            # Ensure both results are on same device for comparison
+            if results.device != reference_results.device:
+                results = results.to(reference_results.device)
+
+            mae_scores[method.name] = torch.mean(torch.abs(results - reference_results)).item()
+
+        return mae_scores
+
+    def test_gradients(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> dict[str, float]:
+        """Test gradient computation for methods that support it."""
+        gradient_norms = {}
+
+        for method in self.methods:
+            if not method.supports_gradients:
+                continue
+
+            test_pred = pred_boxes.clone().requires_grad_(True)
+            loss = method.calculator(test_pred, target_boxes).sum()
+            loss.backward()
+            gradient_norms[method.name] = test_pred.grad.norm().item()
+
+        return gradient_norms
+
+
+def create_test_boxes(device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+    """Create test box pairs with various configurations."""
     pred_boxes = torch.tensor(
         [
             [50, 50, 30, 20, 0.0],  # Horizontal rectangle
@@ -138,116 +239,69 @@ if __name__ == "__main__":
         dtype=torch.float32,
     )
 
+    return pred_boxes, target_boxes
+
+
+def main():
+    """Main execution function."""
+    # Seed for reproducibility
+    seed_everything(seed=42, deterministic=False)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    print("Testing Rotated IoU Implementations")
+    print("=" * 50)
+    print(f"Device: {device}")
+    print("Random seed: 42")
+
+    # Use Shapely as reference if available, otherwise use first method
+    reference = "Shapely" if SHAPELY_AVAILABLE else IOU_METHODS[0].name
+    comparator = IoUComparator(device, reference_method=reference)
+
+    print(f"Configured methods: {', '.join(m.name for m in comparator.methods)}")
+    print(f"Reference method: {comparator.reference_method}")
+
+    pred_boxes, target_boxes = create_test_boxes(device)
+
+    # Test 1: Compare all methods
     print(f"\nTesting {pred_boxes.shape[0]} box pairs")
+    results = comparator.compute_all(pred_boxes, target_boxes)
+    for method_name, ious in results.items():
+        print(f"{method_name:20s}: {ious.cpu().numpy()}")
 
-    # Test ProbIoU
-    with torch.no_grad():
-        prob_ious = prob_iou(pred_boxes, target_boxes)
-    print(f"ProbIoU IoU: {prob_ious.cpu().numpy()}")
-
-    # Test ProbIoU Loss
-    prob_loss = ProbIoULoss(mode="l1")
-    with torch.no_grad():
-        prob_loss_values = 1 - prob_loss(pred_boxes, target_boxes)
-    print(f"ProbIoU (from loss): {prob_loss_values.cpu().numpy()}")
-
-    # Test Approximation IoU
-    with torch.no_grad():
-        approx_ious = approx_iou(pred_boxes, target_boxes)
-    print(f"Approximation IoU: {approx_ious.cpu().numpy()}")
-
-    # Test Precise IoU
-    with torch.no_grad():
-        precise_ious = precise_iou(pred_boxes, target_boxes)
-    print(f"Precise IoU: {precise_ious.cpu().numpy()}")
-
-    # Test Shapely IoU if available
-    if shapely_iou is not None:
-        with torch.no_grad():
-            shapely_ious = shapely_iou(pred_boxes, target_boxes)
-        print(f"Shapely IoU: {shapely_ious.cpu().numpy()}")
-
-    # Test identical boxes (should give IoU ≈ 1.0)
+    # Test 2: Identical boxes (should give IoU ≈ 1.0)
     print("\n--- Testing Identical Boxes ---")
-    identical_prob = prob_iou(pred_boxes[:3], pred_boxes[:3])
-    identical_approx = approx_iou(pred_boxes[:3], pred_boxes[:3])
-    identical_precise = precise_iou(pred_boxes[:3], pred_boxes[:3])
+    identical_results = comparator.compute_all(pred_boxes[:3], pred_boxes[:3])
+    for method_name, ious in identical_results.items():
+        print(f"{method_name:20s}: {ious.cpu().numpy()}")
 
-    print(f"ProbIoU (identical): {identical_prob.cpu().numpy()}")
-    print(f"Approximation (identical): {identical_approx.cpu().numpy()}")
-    print(f"Precise (identical): {identical_precise.cpu().numpy()}")
+    # Test 3: Accuracy comparison
+    mae_scores = comparator.compare_accuracy(pred_boxes, target_boxes)
+    if mae_scores:
+        print(f"\n--- Accuracy Comparison vs {comparator.reference_method} ---")
+        for method_name, mae in mae_scores.items():
+            print(f"{method_name:20s} MAE: {mae:.6f}")
 
-    if shapely_iou is not None:
-        identical_shapely = shapely_iou(pred_boxes[:3], pred_boxes[:3])
-        print(f"Shapely (identical): {identical_shapely.cpu().numpy()}")
-
-    # Accuracy comparison vs Shapely
-    if shapely_iou is not None:
-        print("\n--- Accuracy Comparison vs Shapely ---")
-        shapely_results = shapely_iou(pred_boxes, target_boxes)
-        precise_results = precise_iou(pred_boxes, target_boxes)
-        approx_results = approx_iou(pred_boxes, target_boxes)
-
-        precise_mae = torch.mean(torch.abs(precise_results - shapely_results)).item()
-        approx_mae = torch.mean(torch.abs(approx_results - shapely_results)).item()
-
-        print(f"Precise IoU MAE vs Shapely: {precise_mae:.6f}")
-        print(f"Approximation IoU MAE vs Shapely: {approx_mae:.6f}")
-
-    # Performance comparison
+    # Test 4: Performance benchmark
     print("\n--- Performance Test ---")
-    large_batch = 1000
-    large_pred = torch.rand(large_batch, 5, device=device) * 100
-    large_target = torch.rand(large_batch, 5, device=device) * 100
+    timings = comparator.benchmark(batch_size=1000, num_iterations=10)
+    for method_name, time_ms in timings.items():
+        print(f"{method_name:20s}: {time_ms:9.2f}ms")
 
-    import time
-
-    # ProbIoU timing
-    start = time.time()
-    for _ in range(10):
-        _ = prob_iou(large_pred, large_target)
-    prob_time = (time.time() - start) / 10
-
-    print(f"ProbIoU time (1000 boxes): {prob_time * 1000:.2f}ms")
-
-    # Approximation IoU timing
-    start = time.time()
-    for _ in range(3):
-        _ = approx_iou(large_pred, large_target)
-    approx_time = (time.time() - start) / 3
-
-    print(f"Approximation IoU time (1000 boxes): {approx_time * 1000:.2f}ms")
-
-    # Precise IoU timing
-    start = time.time()
-    for _ in range(3):
-        _ = precise_iou(large_pred, large_target)
-    precise_time = (time.time() - start) / 3
-
-    print(f"Precise IoU time (1000 boxes): {precise_time * 1000:.2f}ms")
-
-    if shapely_iou is not None:
-        # Shapely timing (CPU only)
-        cpu_pred = large_pred[:100].cpu()
-        cpu_target = large_target[:100].cpu()
-
-        start = time.time()
-        _ = shapely_iou(cpu_pred, cpu_target)
-        shapely_time = time.time() - start
-
-        print(f"Shapely IoU time (100 boxes): {shapely_time * 1000:.2f}ms")
-
-    # Test gradients (only for differentiable methods)
+    # Test 5: Gradient test
     print("\n--- Gradient Test ---")
-    test_pred = pred_boxes[:3].clone().requires_grad_(True)
-    test_target = target_boxes[:3].clone()
-
-    # ProbIoU gradients
-    loss = prob_iou(test_pred, test_target).sum()
-    loss.backward()
-    grad_norm = test_pred.grad.norm().item()
-
-    print(f"ProbIoU gradient norm: {grad_norm:.6f}")
-    print("Note: Precise and Approximation IoU methods are not differentiable")
+    grad_norms = comparator.test_gradients(pred_boxes[:3], target_boxes[:3])
+    if grad_norms:
+        for method_name, grad_norm in grad_norms.items():
+            print(f"{method_name:20s} gradient norm: {grad_norm:.6f}")
+        non_diff = [m.name for m in comparator.methods if not m.supports_gradients]
+        if non_diff:
+            print(f"Note: {', '.join(non_diff)} are not differentiable")
+    else:
+        print("No methods support gradients")
 
     print("\nAll tests completed!")
+
+
+if __name__ == "__main__":
+    main()
