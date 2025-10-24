@@ -117,7 +117,7 @@ def obb_format_to_corners(obb_tensor: torch.Tensor, degrees: bool = True, flatte
 
     # Flatten to 8 coordinates: (..., 4, 2) -> (..., 8)
     if flatten:
-        corners_global = corners_global.reshape(*corners_global.shape[:-2], 8)
+        corners_global = corners_global.flatten(-2)
 
     return corners_global
 
