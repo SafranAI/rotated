@@ -1,7 +1,6 @@
 import torch
 
 
-# NOTE: Very clean implementation of the paper, well done!
 class ProbIoU:
     """Probabilistic IoU for Rotated Bounding Boxes.
 
@@ -14,7 +13,6 @@ class ProbIoU:
     """
 
     def __init__(self, eps: float = 1e-3):
-        # NOTE: Can/should we use a smaller eps ? It is used in many places.
         self.eps = eps
 
     def __call__(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
@@ -28,11 +26,8 @@ class ProbIoU:
             IoU tensor [N] - ProbIoU values for each box pair (0 to 1)
         """
         # Convert to Gaussian Bounding Box form
-        gbboxes1 = self._gbb_form(pred_boxes)
-        gbboxes2 = self._gbb_form(target_boxes)
-
-        center_x1, center_y1, variance_a1, variance_b1, angle1 = gbboxes1.unbind(-1)
-        center_x2, center_y2, variance_a2, variance_b2, angle2 = gbboxes2.unbind(-1)
+        center_x1, center_y1, variance_a1, variance_b1, angle1 = self._gbb_form(pred_boxes)
+        center_x2, center_y2, variance_a2, variance_b2, angle2 = self._gbb_form(target_boxes)
 
         # Get rotated covariance elements
         covariance_a1, covariance_b1, covariance_c1 = self._rotated_form(variance_a1, variance_b1, angle1)
@@ -75,19 +70,17 @@ class ProbIoU:
         l1_loss = torch.sqrt(1.0 - torch.exp(-bhattacharyya_distance) + self.eps)
         iou = 1.0 - l1_loss
 
-        # NOTE: might be worth clamping here just in case ?
-        # return iou.clamp(0.0, 1.0)
-        return iou
+        return iou.clamp(0.0, 1.0)
 
-    def _gbb_form(self, boxes: torch.Tensor) -> torch.Tensor:
+    def _gbb_form(
+        self, boxes: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Convert rotated bounding boxes to Gaussian Bounding Box form."""
         center_x, center_y, width, height, angle = boxes.unbind(-1)
         # Convert w,h to variance: σ² = (w²/12, h²/12) for uniform distribution
         variance_a = width.pow(2) / 12.0
         variance_b = height.pow(2) / 12.0
-        # NOTE: can we just return the list of tensors (without stacking) ?
-        # Because we unbind immediatly after anyway.
-        return torch.stack([center_x, center_y, variance_a, variance_b, angle], dim=-1)
+        return center_x, center_y, variance_a, variance_b, angle
 
     def _rotated_form(
         self, variance_a: torch.Tensor, variance_b: torch.Tensor, angles: torch.Tensor
@@ -98,7 +91,6 @@ class ProbIoU:
 
         cos_squared = cos_angle.pow(2)
         sin_squared = sin_angle.pow(2)
-        # NOTE: Nice! Cant remember last time I used sin(2x) = 2sin(x)cos(x) :D
         cos_sin = cos_angle * sin_angle
 
         covariance_a = variance_a * cos_squared + variance_b * sin_squared
