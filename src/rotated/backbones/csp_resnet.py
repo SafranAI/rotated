@@ -55,17 +55,23 @@ class RepVggBlock(nn.Module):
         output_tensor = self.act(output_tensor)
         return output_tensor
 
-    def convert_to_deploy(self) -> None:
+    def export(self) -> None:
         """Convert to deployment mode by fusing convolutions."""
-        if not hasattr(self, "conv"):
-            self.conv = nn.Conv2d(
-                in_channels=self.in_channels,
-                out_channels=self.out_channels,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-                groups=1,
-            )
+        # Already exported
+        if hasattr(self, "conv"):
+            return
+
+        if self.training:
+            raise RuntimeError("Model must be in eval mode before export. Call model.eval() first.")
+
+        self.conv = nn.Conv2d(
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            groups=1,
+        )
 
         kernel, bias = self.get_equivalent_kernel_bias()
         self.conv.weight.data = kernel
@@ -89,8 +95,7 @@ class RepVggBlock(nn.Module):
         """Pad 1x1 kernel to 3x3 size."""
         if kernel1x1 is None:
             return 0
-        else:
-            return F.pad(kernel1x1, [1, 1, 1, 1])
+        return F.pad(kernel1x1, [1, 1, 1, 1])
 
     def _fuse_bn_tensor(self, branch: ConvBNLayer) -> tuple[torch.Tensor, torch.Tensor]:
         """Fuse conv and batch norm into equivalent conv parameters."""
@@ -284,6 +289,7 @@ class CSPResNet(nn.Module):
 
         self.use_checkpoint = use_checkpoint
         self.return_levels = list(return_levels)
+        self._exported = False
 
         # Apply multipliers and convert to lists for TorchScript compatibility
         channels_list = [max(round(channels_val * width_mult), 1) for channels_val in channels]
@@ -350,3 +356,18 @@ class CSPResNet(nn.Module):
     @property
     def out_strides(self) -> list[int]:
         return [self._out_strides[level_idx] for level_idx in self.return_levels]
+
+    def export(self) -> None:
+        """Convert all RepVggBlocks to deployment mode."""
+        if self._exported:
+            return
+
+        if self.training:
+            raise RuntimeError("Model must be in eval mode before export. Call model.eval() first.")
+
+        for stage in self.stages:
+            for block in stage.blocks:
+                if hasattr(block, "conv2") and hasattr(block.conv2, "export"):
+                    block.conv2.export()
+
+        self._exported = True
