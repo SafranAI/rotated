@@ -16,6 +16,11 @@ class PPYOLOER(nn.Module):
     Simple composition of backbone, neck, and head components.
     The head uses a consistent interface that always returns the same format:
     (losses, cls_scores, decoded_boxes) where losses is None during inference.
+
+    Reference:
+        Title: "PP-YOLOE-R: An Efficient Anchor-Free Rotated Object Detector"
+        Authors: Xinxin Wang, Guanzhong Wang, Qingqing Dang, Yi Liu, Xiaoguang Hu, Dianhai Yu
+        Paper link: https://arxiv.org/pdf/2211.02386
     """
 
     def __init__(self, backbone: nn.Module, neck: nn.Module, head: nn.Module):
@@ -48,6 +53,14 @@ class PPYOLOER(nn.Module):
         features = self.backbone(images)
         features = self.neck(features)
         return self.head(features, targets)
+
+    def export(self) -> None:
+        """Convert the model to deployment mode by reparameterizing layers if available."""
+        if self.training:
+            raise RuntimeError("Model must be in eval mode before export. Call model.eval() first.")
+
+        if hasattr(self.backbone, "export"):
+            self.backbone.export()
 
 
 def create_ppyoloer_model(num_classes: int = 15) -> PPYOLOER:
