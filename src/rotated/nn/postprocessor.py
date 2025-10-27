@@ -16,7 +16,6 @@ class DetectionPostProcessor(nn.Module):
         nms_thresh: IoU threshold for NMS
         detections_per_img: Maximum number of detections to keep per image
         topk_candidates: Number of top candidates to consider before NMS
-        iou_calculator: IoU calculator module. Defaults to PreciseRotatedIoU if None.
     """
 
     def __init__(
@@ -56,7 +55,6 @@ class DetectionPostProcessor(nn.Module):
             nms_thresh=self.nms_thresh,
             detections_per_img=self.detections_per_img,
             topk_candidates=self.topk_candidates,
-            iou_calculator=self.iou_calculator,
         )
 
     def extra_repr(self) -> str:
