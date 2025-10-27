@@ -1,3 +1,6 @@
+# Adapted from original paper implementation:
+# https://github.com/ProbIOU/PROBIOU-SSD/blob/8ea89792881c61c98ea1ba01a6efc69566d467b7/utils/box/box_utils.py#L163
+
 import torch
 
 
@@ -8,8 +11,9 @@ class ProbIoU:
     This provides differentiable IoU computation with better gradient flow compared to discrete polygon IoU.
 
     Reference:
-        "Gaussian Bounding Boxes and Probabilistic Intersection-over-Union for Object Detection"
-        Murrugarra-Llerena, Jeffri and Kirsten, Lucas N. and Zeni, Luis Felipe and Jung, Claudio R.
+        Title: "Gaussian Bounding Boxes and Probabilistic Intersection-over-Union for Object Detection"
+        Authors: Jeffri M. Llerena, Luis Felipe Zeni, Lucas N. Kristen, Claudio Jung
+        Paper link: https://arxiv.org/pdf/2106.06072
     """
 
     def __init__(self, eps: float = 1e-3):

@@ -17,6 +17,11 @@ class PPYOLOER(nn.Module):
     Simple composition of backbone, neck, head, and optional postprocessor components.
     The head always returns (losses, decoded_boxes, scores, labels).
     The postprocessor optionally applies NMS for final detection output.
+
+    Reference:
+        Title: "PP-YOLOE-R: An Efficient Anchor-Free Rotated Object Detector"
+        Authors: Xinxin Wang, Guanzhong Wang, Qingqing Dang, Yi Liu, Xiaoguang Hu, Dianhai Yu
+        Paper link: https://arxiv.org/pdf/2211.02386
     """
 
     def __init__(
