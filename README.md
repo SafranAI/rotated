@@ -23,10 +23,10 @@ targets = {
     'boxes': torch.rand(2, 5, 5) * 100,
     'valid_mask': torch.ones(2, 5, 1)
 }
-losses, cls_scores, decoded_boxes = model(images, targets)
+losses, boxes, socres, labels = model(images, targets)
 
 # Inference
-_, cls_scores, decoded_boxes = model(images)
+_, boxes, socres, labels = model(images)
 ```
 
 ## Acknowledgments
