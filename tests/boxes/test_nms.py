@@ -140,7 +140,7 @@ def test_postprocess_score_filtering():
     scores = torch.tensor([0.9, 0.03, 0.7])  # Middle score below threshold
     labels = torch.tensor([0, 1, 2])
 
-    _, _, result_scores = postprocess_detections(
+    _, result_scores, _ = postprocess_detections(
         boxes, scores, labels, score_thresh=0.05, nms_thresh=0.5, detections_per_img=5
     )
 
@@ -169,7 +169,7 @@ def test_postprocess_topk_candidates():
     scores = torch.tensor([0.9, 0.8, 0.7, 0.6, 0.5])  # All above threshold
     labels = torch.tensor([0, 1, 2, 3, 4])  # All different classes
 
-    _, _, result_scores = postprocess_detections(
+    _, result_scores, _ = postprocess_detections(
         boxes, scores, labels, score_thresh=0.1, nms_thresh=0.5, topk_candidates=3, detections_per_img=5
     )
 
@@ -196,7 +196,7 @@ def test_postprocess_nms_suppression():
     scores = torch.tensor([0.9, 0.8, 0.6])
     labels = torch.tensor([0, 0, 1])  # First two same class
 
-    _, _, result_scores = postprocess_detections(
+    _, result_scores, _ = postprocess_detections(
         boxes, scores, labels, score_thresh=0.1, nms_thresh=0.5, topk_candidates=10, detections_per_img=5
     )
 
@@ -232,14 +232,14 @@ def test_postprocess_batched_input():
     batch_scores = torch.tensor([[0.9, 0.8], [0.9, 0.02]])  # Second batch has low score
     batch_labels = torch.tensor([[0, 1], [0, 1]])
 
-    result_boxes, result_labels, result_scores = postprocess_detections(
+    result_boxes, result_scores, result_labels = postprocess_detections(
         batch_boxes, batch_scores, batch_labels, score_thresh=0.05, nms_thresh=0.5, detections_per_img=3
     )
 
     # Check output shapes
     assert result_boxes.shape == (2, 3, 5)
-    assert result_labels.shape == (2, 3)
     assert result_scores.shape == (2, 3)
+    assert result_labels.shape == (2, 3)
 
     # Batch 1 should have 2 valid detections
     batch1_valid = (result_scores[0] > 0).sum().item()
@@ -256,18 +256,18 @@ def test_postprocess_empty_input():
     empty_scores = torch.empty(0)
     empty_labels = torch.empty(0, dtype=torch.long)
 
-    result_boxes, result_labels, result_scores = postprocess_detections(
+    result_boxes, result_scores, result_labels = postprocess_detections(
         empty_boxes, empty_scores, empty_labels, score_thresh=0.05, nms_thresh=0.5, detections_per_img=3
     )
 
     # Should return properly shaped tensors with padding
     assert result_boxes.shape == (3, 5)
-    assert result_labels.shape == (3,)
     assert result_scores.shape == (3,)
+    assert result_labels.shape == (3,)
 
     # All should be padding values
-    assert torch.all(result_labels == -1)
     assert torch.all(result_scores == 0)
+    assert torch.all(result_labels == -1)
 
 
 def test_torchscript_compatibility():

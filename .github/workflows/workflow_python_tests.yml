@@ -1,0 +1,34 @@
+# Inspired from:
+# https://github.com/operationcanard/finops-reporting/blob/main/.github/workflows/pre-commit-push.yml#L17
+name: Run python tests
+
+on: workflow_call
+
+jobs:
+  # TODO: test for all platforms (cpu, cu118, cu124, macos-x86)
+  python-tests-hooks:
+    name: Run python test on repo
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📂 Checkout Repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: 🐍 Set up Python 3.10
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.10"
+
+      - name: 🌞 Install uv
+        uses: astral-sh/setup-uv@2ddd2b9cb38ad8efd50337e8ab201519a34c9f24 # v7.1.1
+
+      # With cache CI takes longer to run than without:
+      # With cache   : 37s (download cache) + 28s (test)
+      # without cache: 56s (test)
+      # - name: 💾 cache uv venv
+      #   uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      #   with:
+      #     path: .venv
+      #     key: venv-${{ hashFiles('uv.lock') }}
+
+      - name: 🧪 Tests
+        run: uv run pytest
