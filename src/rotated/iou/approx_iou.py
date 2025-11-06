@@ -4,10 +4,12 @@ Uses adaptive and stratified sampling to improve accuracy over uniform random sa
 
 import torch
 
-from rotated.iou.base import BaseRotatedIoU
+from rotated.boxes.utils import check_aabb_overlap
 
 
-class ApproxRotatedIoU(BaseRotatedIoU):
+# NOTE: Not relying on a Base class as we encountered issues with
+# torchscript export, when using inheritance, with NMS / post-processing
+class ApproxRotatedIoU:
     """Rotated IoU approximation with sampling strategy.
 
     Args:
@@ -16,8 +18,40 @@ class ApproxRotatedIoU(BaseRotatedIoU):
     """
 
     def __init__(self, base_samples: int = 2000, eps: float = 1e-7):
-        super().__init__(eps=eps)
         self.base_samples = base_samples
+        self.eps = eps
+
+    def __call__(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
+        """Compute IoU between rotated boxes.
+
+        Args:
+            pred_boxes: [N, 5] (x, y, w, h, angle)
+            target_boxes: [N, 5] (x, y, w, h, angle)
+
+        Returns:
+            [N] IoU values
+        """
+        N = pred_boxes.shape[0]
+        if N == 0:
+            return torch.empty(0, device=pred_boxes.device, dtype=pred_boxes.dtype)
+
+        # Step 1: AABB filtering to find overlap candidates
+        overlap_mask = check_aabb_overlap(pred_boxes, target_boxes)
+        ious = torch.zeros(N, device=pred_boxes.device, dtype=pred_boxes.dtype)
+
+        if not overlap_mask.any():
+            return ious
+
+        # Step 2: Get candidates that passed AABB filtering
+        candidates = torch.where(overlap_mask)[0]
+        pred_candidates = pred_boxes[candidates]
+        target_candidates = target_boxes[candidates]
+
+        # Step 3: Compute IoU for candidates (implementation-specific)
+        candidate_ious = self._compute_candidate_ious(pred_candidates, target_candidates)
+        ious[candidates] = candidate_ious
+
+        return ious
 
     def _compute_candidate_ious(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
         """Compute IoU for candidate box pairs using sampling strategy.
@@ -29,28 +63,24 @@ class ApproxRotatedIoU(BaseRotatedIoU):
         Returns:
             [M] IoU values for candidates
         """
-        return self._improved_sampling_iou(pred_boxes, target_boxes)
+        M = pred_boxes.shape[0]
+        device = pred_boxes.device
 
-    def _improved_sampling_iou(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
-        """Compute IoU using sampling strategy."""
-        N = boxes1.shape[0]
-        device = boxes1.device
-
-        if N == 0:
-            return torch.empty(0, device=device, dtype=boxes1.dtype)
+        if M == 0:
+            return torch.empty(0, device=device, dtype=pred_boxes.dtype)
 
         # Box areas
-        area1 = boxes1[:, 2] * boxes1[:, 3]
-        area2 = boxes2[:, 2] * boxes2[:, 3]
+        area1 = pred_boxes[:, 2] * pred_boxes[:, 3]
+        area2 = target_boxes[:, 2] * target_boxes[:, 3]
 
         # Adaptive sample count based on box sizes
-        sample_counts = self._compute_adaptive_sample_counts(boxes1, boxes2)
+        sample_counts = self._compute_adaptive_sample_counts(pred_boxes, target_boxes)
 
         # Compute intersection estimates for each box pair
-        intersection_areas = torch.zeros(N, device=device, dtype=boxes1.dtype)
+        intersection_areas = torch.zeros(M, device=device, dtype=pred_boxes.dtype)
 
-        for i in range(N):
-            intersection_areas[i] = self._estimate_intersection_area(boxes1[i], boxes2[i], sample_counts[i])
+        for i in range(M):
+            intersection_areas[i] = self._estimate_intersection_area(pred_boxes[i], target_boxes[i], sample_counts[i])
 
         # Compute IoU
         union_areas = area1 + area2 - intersection_areas
