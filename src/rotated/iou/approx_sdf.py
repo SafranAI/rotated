@@ -6,6 +6,7 @@ Adapted from: https://numbersmithy.com/an-algorithm-for-computing-the-approximat
 import torch
 
 from rotated.boxes.conversion import obb_to_corners_format
+from rotated.boxes.utils import check_aabb_overlap
 
 
 class ApproxSDFL1:
@@ -18,7 +19,7 @@ class ApproxSDFL1:
             return torch.empty(0, device=pred_boxes.device, dtype=pred_boxes.dtype)
 
         # Step 1: AABB filtering
-        overlap_mask = self._check_aabb_overlap(pred_boxes, target_boxes)
+        overlap_mask = check_aabb_overlap(pred_boxes, target_boxes)
         ious = torch.zeros(N, device=pred_boxes.device, dtype=pred_boxes.dtype)
 
         if not overlap_mask.any():
@@ -40,32 +41,6 @@ class ApproxSDFL1:
         ious[candidates] = (pred_area + target_area) / union - 1
         return ious
 
-    def _check_aabb_overlap(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
-        """AABB overlap check."""
-        bounds1 = self._compute_aabb_bounds(boxes1)
-        bounds2 = self._compute_aabb_bounds(boxes2)
-
-        no_overlap_x = (bounds1[:, 1] < bounds2[:, 0]) | (bounds2[:, 1] < bounds1[:, 0])
-        no_overlap_y = (bounds1[:, 3] < bounds2[:, 2]) | (bounds2[:, 3] < bounds1[:, 2])
-
-        return ~(no_overlap_x | no_overlap_y)
-
-    def _compute_aabb_bounds(self, boxes: torch.Tensor) -> torch.Tensor:
-        """Compute axis-aligned bounding box bounds."""
-        x, y, w, h, angle = boxes.unbind(-1)
-        cos_a, sin_a = torch.cos(angle), torch.sin(angle)
-
-        # Half extents after rotation
-        ext_x = 0.5 * (w * torch.abs(cos_a) + h * torch.abs(sin_a))
-        ext_y = 0.5 * (w * torch.abs(sin_a) + h * torch.abs(cos_a))
-
-        min_x = x - ext_x
-        max_x = x + ext_x
-        min_y = y - ext_y
-        max_y = y + ext_y
-
-        return torch.stack([min_x, max_x, min_y, max_y], dim=-1)
-
 
 def _saf_obox2obox_vec(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_samples: int = 100) -> torch.Tensor:
     """Vectorized implementation of Signed area difference formed between pairs of predictions and target boxes.
@@ -80,7 +55,7 @@ def _saf_obox2obox_vec(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_s
     """
 
     # from (xc, yc, w, h, angle) -> (x1,y1, x2,y2, x3,y3, x4,y4)
-    poly = obb_to_corners_format(pred_boxes, degrees=False, flatten=False)
+    poly = obb_to_corners_format(pred_boxes, degrees=False)
     factors2 = torch.arange(n_samples, device=pred_boxes.device, dtype=pred_boxes.dtype) / n_samples
     factors1 = 1.0 - factors2
 

@@ -20,6 +20,7 @@ except ImportError:
     SHAPELY_AVAILABLE = False
 
 from rotated.iou.approx_iou import ApproxRotatedIoU
+from rotated.iou.approx_sdf import ApproxSDFL1
 from rotated.iou.precise_iou import PreciseRotatedIoU
 from rotated.iou.prob_iou import ProbIoU
 from rotated.utils.seed import seed_everything
@@ -39,6 +40,7 @@ IOU_METHODS = [
     IoUMethod("ProbIoU", ProbIoU(), supports_gradients=True),
     IoUMethod("Approximation", ApproxRotatedIoU()),
     IoUMethod("Precise", PreciseRotatedIoU()),
+    IoUMethod("SDF-L1", ApproxSDFL1()),
     # Add your custom methods here, e.g.:
     # IoUMethod("MyCustomIoU", MyCustomIoU(), supports_gradients=True),
 ]
