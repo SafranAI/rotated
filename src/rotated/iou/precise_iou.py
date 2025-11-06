@@ -5,7 +5,11 @@ Using the Sutherland-Hodgman clipping algorithm which is the core of exact polyg
 
 import torch
 
+from rotated.boxes.utils import check_aabb_overlap
 
+
+# NOTE: Not relying on a Base class as we encountered issues with
+# torchscript export, when using inheritance, with NMS / post-processing
 class PreciseRotatedIoU:
     """Exact rotated IoU computation."""
 
@@ -13,7 +17,7 @@ class PreciseRotatedIoU:
         self.eps = eps
 
     def __call__(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
-        """Compute exact IoU between rotated boxes.
+        """Compute IoU between rotated boxes.
 
         Args:
             pred_boxes: [N, 5] (x, y, w, h, angle)
@@ -26,57 +30,50 @@ class PreciseRotatedIoU:
         if N == 0:
             return torch.empty(0, device=pred_boxes.device, dtype=pred_boxes.dtype)
 
-        # Step 1: Filter out obviously non-overlapping boxes
-        overlap_candidates = self._find_overlap_candidates(pred_boxes, target_boxes)
+        # Step 1: AABB filtering to find overlap candidates
+        overlap_mask = check_aabb_overlap(pred_boxes, target_boxes)
         ious = torch.zeros(N, device=pred_boxes.device, dtype=pred_boxes.dtype)
 
-        if not overlap_candidates.any():
+        if not overlap_mask.any():
             return ious
 
-        # Step 2: Process only the candidates
-        candidate_indices = torch.where(overlap_candidates)[0]
-        pred_candidates = pred_boxes[candidate_indices]
-        target_candidates = target_boxes[candidate_indices]
+        # Step 2: Get candidates that passed AABB filtering
+        candidates = torch.where(overlap_mask)[0]
+        pred_candidates = pred_boxes[candidates]
+        target_candidates = target_boxes[candidates]
 
-        # Step 3: Convert boxes to polygons
-        pred_polygons = self._boxes_to_polygons(pred_candidates)
-        target_polygons = self._boxes_to_polygons(target_candidates)
+        # Step 3: Compute IoU for candidates (implementation-specific)
+        candidate_ious = self._compute_candidate_ious(pred_candidates, target_candidates)
+        ious[candidates] = candidate_ious
 
-        # Step 4: Compute individual polygon areas
+        return ious
+
+    def _compute_candidate_ious(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
+        """Compute IoU for candidate box pairs using exact polygon intersection.
+
+        Args:
+            pred_boxes: [M, 5] candidate predicted boxes
+            target_boxes: [M, 5] candidate target boxes
+
+        Returns:
+            [M] IoU values for candidates
+        """
+        # Convert boxes to polygons
+        pred_polygons = self._boxes_to_polygons(pred_boxes)
+        target_polygons = self._boxes_to_polygons(target_boxes)
+
+        # Compute individual polygon areas
         pred_areas = self._compute_polygon_areas(pred_polygons)
         target_areas = self._compute_polygon_areas(target_polygons)
 
-        # Step 5: Compute intersection areas (the expensive part)
+        # Compute intersection areas (the expensive part)
         intersection_areas = self._compute_intersection_areas(pred_polygons, target_polygons)
 
-        # Step 6: Calculate IoU = intersection / union
+        # Calculate IoU = intersection / union
         union_areas = pred_areas + target_areas - intersection_areas
         candidate_ious = self._safe_divide(intersection_areas, union_areas)
 
-        ious[candidate_indices] = candidate_ious
-        return ious
-
-    def _find_overlap_candidates(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
-        """Find box pairs that might overlap using axis-aligned bounding boxes."""
-        # Extract box parameters
-        x1, y1, w1, h1, angle1 = boxes1.unbind(-1)
-        x2, y2, w2, h2, angle2 = boxes2.unbind(-1)
-
-        # Compute the axis-aligned bounding box extents for boxes1
-        cos_a1, sin_a1 = torch.cos(angle1), torch.sin(angle1)
-        ext1_w = 0.5 * w1 * torch.abs(cos_a1) + 0.5 * h1 * torch.abs(sin_a1)
-        ext1_h = 0.5 * w1 * torch.abs(sin_a1) + 0.5 * h1 * torch.abs(cos_a1)
-
-        # Compute the axis-aligned bounding box extents for boxes2
-        cos_a2, sin_a2 = torch.cos(angle2), torch.sin(angle2)
-        ext2_w = 0.5 * w2 * torch.abs(cos_a2) + 0.5 * h2 * torch.abs(sin_a2)
-        ext2_h = 0.5 * w2 * torch.abs(sin_a2) + 0.5 * h2 * torch.abs(cos_a2)
-
-        # Check if AABBs overlap
-        x_overlap = torch.abs(x1 - x2) < (ext1_w + ext2_w)
-        y_overlap = torch.abs(y1 - y2) < (ext1_h + ext2_h)
-
-        return x_overlap & y_overlap
+        return candidate_ious
 
     def _boxes_to_polygons(self, boxes: torch.Tensor) -> torch.Tensor:
         """Convert rotated boxes to 4-vertex polygons.
