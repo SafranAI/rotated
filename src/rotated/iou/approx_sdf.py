@@ -5,7 +5,7 @@ Adapted from: https://numbersmithy.com/an-algorithm-for-computing-the-approximat
 
 import torch
 
-from rotated.boxes.conversion import obb_format_to_corners
+from rotated.boxes.conversion import obb_to_corners_format
 
 
 class ApproxSDFL1:
@@ -35,7 +35,7 @@ class ApproxSDFL1:
         pred_area = pred_candidates[:, 2] * pred_candidates[:, 3]
         target_area = target_candidates[:, 2] * target_candidates[:, 3]
 
-        a_extra = saf_obox2obox_vec(pred_candidates, target_candidates, n_samples=self.n_samples)
+        a_extra = _saf_obox2obox_vec(pred_candidates, target_candidates, n_samples=self.n_samples)
         union = target_area + a_extra.float()
         ious[candidates] = (pred_area + target_area) / union - 1
         return ious
@@ -67,7 +67,7 @@ class ApproxSDFL1:
         return torch.stack([min_x, max_x, min_y, max_y], dim=-1)
 
 
-def saf_obox2obox_vec(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_samples: int = 20) -> torch.Tensor:
+def _saf_obox2obox_vec(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_samples: int = 100) -> torch.Tensor:
     """Vectorized implementation of Signed area difference formed between pairs of predictions and target boxes.
 
     Args:
@@ -80,7 +80,7 @@ def saf_obox2obox_vec(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_sa
     """
 
     # from (xc, yc, w, h, angle) -> (x1,y1, x2,y2, x3,y3, x4,y4)
-    poly = obb_format_to_corners(pred_boxes, degrees=False, flatten=False)
+    poly = obb_to_corners_format(pred_boxes, degrees=False, flatten=False)
     factors2 = torch.arange(n_samples, device=pred_boxes.device, dtype=pred_boxes.dtype) / n_samples
     factors1 = 1.0 - factors2
 
@@ -112,7 +112,7 @@ def saf_obox2obox_vec(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_sa
     return safii.sum(dim=[-2, -1])
 
 
-def pairwise_saf_obox2obox(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_samples: int = 20) -> torch.Tensor:
+def _pairwise_saf_obox2obox(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_samples: int = 100) -> torch.Tensor:
     """Signed area difference between 2 sets of oriented boxes, vectorized
 
     Args:
@@ -125,7 +125,7 @@ def pairwise_saf_obox2obox(pred_boxes: torch.Tensor, target_boxes: torch.Tensor,
     """
 
     # from (xc, yc, w, h, angle) -> (x1,y1, x2,y2, x3,y3, x4,y4)
-    poly = obb_format_to_corners(pred_boxes, degrees=False, flatten=False)
+    poly = obb_to_corners_format(pred_boxes, degrees=False, flatten=False)
     factors2 = torch.arange(n_samples, device=pred_boxes.device, dtype=pred_boxes.dtype) / n_samples
     factors1 = 1.0 - factors2
 

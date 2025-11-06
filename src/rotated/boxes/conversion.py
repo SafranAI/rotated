@@ -57,23 +57,20 @@ def standard_to_opencv_format(
     return opencv_center[0], opencv_center[1], opencv_size[0], opencv_size[1], opencv_angle
 
 
-def obb_format_to_corners(obb_tensor: torch.Tensor, degrees: bool = True, flatten: bool = True) -> torch.Tensor:
+def obb_to_corners_format(obb_tensor: torch.Tensor, degrees: bool = True) -> torch.Tensor:
     """Convert 5-coordinate format to 8 corner coordinates.
 
-    Transforms oriented bounding box representation to 4 corner points as
-    either [(x1, y1), (x2, y2), (x3, y3), (x4, y4)] or
-    8 flattened coordinates [x1, y1, x2, y2, x3, y3, x4, y4].
+    Transforms oriented bounding box representation to 4 corner points as [(x1, y1), (x2, y2), (x3, y3), (x4, y4)]
     Works with any batch dimensions.
 
     Args:
         obb_tensor: Tensor of shape (..., 5) containing
                    [center_x, center_y, width, height, angle_deg].
         degrees: if True, convert angle from degrees to radians
-        flatten: if True, flatten output to (..., 8) instead of (..., 4, 2)
 
     Returns:
-        Tensor of shape (..., 4, 2)  or (..., 8) containing corner coordinates.
-        Ordered as: [x1, y1, x2, y2, x3, y3, x4, y4] for
+        Tensor of shape (..., 4, 2) containing corner coordinates.
+        Ordered as: [(x1, y1), (x2, y2), (x3, y3), (x4, y4)] for
         bottom-left, bottom-right, top-right, top-left corners.
     """
     # Extract components
@@ -113,13 +110,7 @@ def obb_format_to_corners(obb_tensor: torch.Tensor, degrees: bool = True, flatte
 
     # Translate to final position
     center = torch.stack([center_x, center_y], dim=-1).unsqueeze(-2)  # (..., 1, 2)
-    corners_global = corners_rotated + center
-
-    # Flatten to 8 coordinates: (..., 4, 2) -> (..., 8)
-    if flatten:
-        corners_global = corners_global.flatten(-2)
-
-    return corners_global
+    return corners_rotated + center
 
 
 def opencv_to_standard_format(obb_tensor: torch.Tensor) -> torch.Tensor:
