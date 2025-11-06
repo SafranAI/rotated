@@ -4,8 +4,10 @@ Uses adaptive and stratified sampling to improve accuracy over uniform random sa
 
 import torch
 
+from rotated.iou.base import BaseRotatedIoU
 
-class ApproxRotatedIoU:
+
+class ApproxRotatedIoU(BaseRotatedIoU):
     """Rotated IoU approximation with sampling strategy.
 
     Args:
@@ -14,66 +16,20 @@ class ApproxRotatedIoU:
     """
 
     def __init__(self, base_samples: int = 2000, eps: float = 1e-7):
+        super().__init__(eps=eps)
         self.base_samples = base_samples
-        self.eps = eps
 
-    def __call__(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
-        """Compute approximate IoU between rotated boxes.
+    def _compute_candidate_ious(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
+        """Compute IoU for candidate box pairs using sampling strategy.
 
         Args:
-            pred_boxes: [N, 5] (x, y, w, h, angle)
-            target_boxes: [N, 5] (x, y, w, h, angle)
+            pred_boxes: [M, 5] candidate predicted boxes
+            target_boxes: [M, 5] candidate target boxes
 
         Returns:
-            [N] IoU values
+            [M] IoU values for candidates
         """
-        N = pred_boxes.shape[0]
-        if N == 0:
-            return torch.empty(0, device=pred_boxes.device, dtype=pred_boxes.dtype)
-
-        # Step 1: AABB filtering
-        overlap_mask = self._check_aabb_overlap(pred_boxes, target_boxes)
-        ious = torch.zeros(N, device=pred_boxes.device, dtype=pred_boxes.dtype)
-
-        if not overlap_mask.any():
-            return ious
-
-        # Step 2: Process overlapping candidates
-        candidates = torch.where(overlap_mask)[0]
-        pred_candidates = pred_boxes[candidates]
-        target_candidates = target_boxes[candidates]
-
-        # Step 3: Sampling-based IoU
-        candidate_ious = self._improved_sampling_iou(pred_candidates, target_candidates)
-        ious[candidates] = candidate_ious
-
-        return ious
-
-    def _check_aabb_overlap(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
-        """AABB overlap check."""
-        bounds1 = self._compute_aabb_bounds(boxes1)
-        bounds2 = self._compute_aabb_bounds(boxes2)
-
-        no_overlap_x = (bounds1[:, 1] < bounds2[:, 0]) | (bounds2[:, 1] < bounds1[:, 0])
-        no_overlap_y = (bounds1[:, 3] < bounds2[:, 2]) | (bounds2[:, 3] < bounds1[:, 2])
-
-        return ~(no_overlap_x | no_overlap_y)
-
-    def _compute_aabb_bounds(self, boxes: torch.Tensor) -> torch.Tensor:
-        """Compute axis-aligned bounding box bounds."""
-        x, y, w, h, angle = boxes.unbind(-1)
-        cos_a, sin_a = torch.cos(angle), torch.sin(angle)
-
-        # Half extents after rotation
-        ext_x = 0.5 * (w * torch.abs(cos_a) + h * torch.abs(sin_a))
-        ext_y = 0.5 * (w * torch.abs(sin_a) + h * torch.abs(cos_a))
-
-        min_x = x - ext_x
-        max_x = x + ext_x
-        min_y = y - ext_y
-        max_y = y + ext_y
-
-        return torch.stack([min_x, max_x, min_y, max_y], dim=-1)
+        return self._improved_sampling_iou(pred_boxes, target_boxes)
 
     def _improved_sampling_iou(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
         """Compute IoU using sampling strategy."""
