@@ -248,6 +248,10 @@ class PPYOLOERHead(nn.Module):
                 - losses: Loss dictionary if targets provided, None otherwise
                 - cls_scores: [B, N, C] - Classification scores (post-sigmoid)
                 - decoded_boxes: [B, N, 5] - Decoded rotated boxes in absolute pixels, angle in [0, π/2)
+
+        Raises:
+            ValueError: If feats length doesn't match fpn_strides length
+            ValueError: If criterion is None when targets are provided
         """
         if len(feats) != len(self.fpn_strides):
             raise ValueError(f"feats length {len(feats)} must equal fpn_strides length {len(self.fpn_strides)}")
