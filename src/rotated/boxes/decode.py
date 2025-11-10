@@ -19,7 +19,7 @@ def decode_ppyoloer_boxes(
         angle_proj: Angle projection weights [angle_bins+1]
 
     Returns:
-        Decoded rotated boxes [B, N, 5] - [cx, cy, w, h, angle] in absolute pixels
+        Decoded rotated boxes [B, N, 5] - [cx, cy, w, h, angle] in absolute pixels, angle in radians [0, π/2)
     """
     xy_offset, wh_scale = reg_dist.split(2, dim=-1)
 

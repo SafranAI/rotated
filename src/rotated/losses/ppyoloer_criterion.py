@@ -68,6 +68,8 @@ class RotatedDetectionLoss(nn.Module):
             targets: Ground truth data:
                 - labels: [B, M, 1] - Class labels [0, num_classes-1]
                 - boxes: [B, M, 5] - Rotated GT boxes [cx, cy, w, h, angle]
+                    * cx, cy, w, h: in absolute pixels
+                    * angle: in radians, should be in range [0, π/2)
                 - valid_mask: [B, M, 1] - Valid target mask
             anchor_points: [1, N, 2] - Anchor point coordinates
             stride_tensor: [1, N, 1] - Stride values
