@@ -134,7 +134,7 @@ class PPYOLOERHead(nn.Module):
         """Generate anchor points with optional caching for efficiency.
 
         Args:
-            feats: Feature maps [P3', P4', P5'] (shallow â†’ deep order)
+            feats: Feature maps [P3', P4', P5'] (shallow -> deep order)
 
         Returns:
             anchor_points: Anchor point coordinates [1, N, 2]
