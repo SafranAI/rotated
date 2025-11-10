@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 
 
@@ -19,8 +18,7 @@ def obb_to_corners_format(obb_tensor: torch.Tensor, degrees: bool = True) -> tor
         bottom-left, bottom-right, top-right, top-left corners.
     """
     # Extract components
-    center_x = obb_tensor[..., 0]
-    center_y = obb_tensor[..., 1]
+    center_xy = obb_tensor[..., :2].unsqueeze(-2)
     width = obb_tensor[..., 2]
     height = obb_tensor[..., 3]
     angle = obb_tensor[..., 4]
@@ -54,8 +52,7 @@ def obb_to_corners_format(obb_tensor: torch.Tensor, degrees: bool = True) -> tor
     corners_rotated = torch.matmul(corners_local, rotation_matrix.transpose(-2, -1))
 
     # Translate to final position
-    center = torch.stack([center_x, center_y], dim=-1).unsqueeze(-2)  # (..., 1, 2)
-    return corners_rotated + center
+    return corners_rotated + center_xy
 
 
 def corners_to_standard_format(corners_tensor: torch.Tensor) -> torch.Tensor:
@@ -94,8 +91,7 @@ def corners_to_standard_format(corners_tensor: torch.Tensor) -> torch.Tensor:
 
     # Normalize angle to [-π/2, π/2] range
     # Use modular arithmetic to handle the wrapping
-    pi = torch.tensor(np.pi, dtype=angle_rad.dtype, device=angle_rad.device)
-    angle_rad = torch.remainder(angle_rad + pi / 2, pi) - pi / 2
+    angle_rad = torch.remainder(angle_rad + torch.pi / 2, torch.pi) - torch.pi / 2
 
     # Stack results
     result = torch.stack([center_x, center_y, width, height, angle_rad], dim=-1)
