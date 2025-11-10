@@ -1,6 +1,49 @@
 import torch
 
 
+def check_aabb_overlap(boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
+    """Check for axis-aligned bounding box overlap.
+
+    Args:
+        boxes1: [N, 5] first set of boxes
+        boxes2: [N, 5] second set of boxes
+
+    Returns:
+        [N] boolean mask indicating which box pairs might overlap
+    """
+    bounds1 = compute_aabb_bounds(boxes1)
+    bounds2 = compute_aabb_bounds(boxes2)
+
+    no_overlap_x = (bounds1[:, 1] < bounds2[:, 0]) | (bounds2[:, 1] < bounds1[:, 0])
+    no_overlap_y = (bounds1[:, 3] < bounds2[:, 2]) | (bounds2[:, 3] < bounds1[:, 2])
+
+    return ~(no_overlap_x | no_overlap_y)
+
+
+def compute_aabb_bounds(boxes: torch.Tensor) -> torch.Tensor:
+    """Compute axis-aligned bounding box bounds for rotated boxes.
+
+    Args:
+        boxes: [N, 5] (x, y, w, h, angle)
+
+    Returns:
+        [N, 4] bounds (min_x, max_x, min_y, max_y)
+    """
+    x, y, w, h, angle = boxes.unbind(-1)
+    cos_a, sin_a = torch.cos(angle), torch.sin(angle)
+
+    # Half extents after rotation
+    ext_x = 0.5 * (w * torch.abs(cos_a) + h * torch.abs(sin_a))
+    ext_y = 0.5 * (w * torch.abs(sin_a) + h * torch.abs(cos_a))
+
+    min_x = x - ext_x
+    max_x = x + ext_x
+    min_y = y - ext_y
+    max_y = y + ext_y
+
+    return torch.stack([min_x, max_x, min_y, max_y], dim=-1)
+
+
 def check_points_in_rotated_boxes(points: torch.Tensor, boxes: torch.Tensor) -> torch.Tensor:
     """Check if points are contained within rotated bounding boxes.
 

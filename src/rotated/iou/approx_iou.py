@@ -1,14 +1,16 @@
 """Rotated IoU Approximation with Sampling Strategy.
 
 Uses adaptive and stratified sampling to improve accuracy over uniform random sampling."""
-# NOTE: add reference (paper, blog, code?) for this (if there is any)
 
 import torch
 
+from rotated.boxes.utils import check_aabb_overlap
 
+
+# NOTE: Not relying on a Base class as we encountered issues with
+# torchscript export, when using inheritance, with NMS / post-processing
 class ApproxRotatedIoU:
     """Rotated IoU approximation with sampling strategy.
-    # NOTE: add description of the general idea in the dosctring
 
     Args:
         base_samples: Base number of samples (will be adapted per box pair)
@@ -33,64 +35,46 @@ class ApproxRotatedIoU:
         if N == 0:
             return torch.empty(0, device=pred_boxes.device, dtype=pred_boxes.dtype)
 
-        # Step 1: AABB filtering
-        overlap_mask = self._check_aabb_overlap(pred_boxes, target_boxes)
+        # Step 1: AABB filtering to find overlap candidates
+        overlap_mask = check_aabb_overlap(pred_boxes, target_boxes)
         ious = torch.zeros(N, device=pred_boxes.device, dtype=pred_boxes.dtype)
 
         if not overlap_mask.any():
             return ious
 
-        # Step 2: Process overlapping candidates
+        # Step 2: Get candidates that passed AABB filtering
         candidates = torch.where(overlap_mask)[0]
         pred_candidates = pred_boxes[candidates]
         target_candidates = target_boxes[candidates]
 
         # Step 3: Sampling-based IoU
-        candidate_ious = self._improved_sampling_iou(pred_candidates, target_candidates)
+        candidate_ious = self._compute_candidate_ious(pred_candidates, target_candidates)
         ious[candidates] = candidate_ious
 
         return ious
 
-    def _check_aabb_overlap(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
-        """AABB overlap check."""
-        bounds1 = self._compute_aabb_bounds(boxes1)
-        bounds2 = self._compute_aabb_bounds(boxes2)
+    def _compute_candidate_ious(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
+        """Compute IoU for candidate box pairs using sampling strategy.
 
-        no_overlap_x = (bounds1[:, 1] < bounds2[:, 0]) | (bounds2[:, 1] < bounds1[:, 0])
-        no_overlap_y = (bounds1[:, 3] < bounds2[:, 2]) | (bounds2[:, 3] < bounds1[:, 2])
+        Args:
+            pred_boxes: [M, 5] candidate predicted boxes
+            target_boxes: [M, 5] candidate target boxes
 
-        return ~(no_overlap_x | no_overlap_y)
+        Returns:
+            [M] IoU values for candidates
+        """
+        M = pred_boxes.shape[0]
+        device = pred_boxes.device
 
-    def _compute_aabb_bounds(self, boxes: torch.Tensor) -> torch.Tensor:
-        """Compute axis-aligned bounding boxes bounds."""
-        x, y, w, h, angle = boxes.unbind(-1)
-        cos_a, sin_a = torch.cos(angle), torch.sin(angle)
-
-        # Half extents after rotation
-        ext_x = 0.5 * (w * torch.abs(cos_a) + h * torch.abs(sin_a))
-        ext_y = 0.5 * (w * torch.abs(sin_a) + h * torch.abs(cos_a))
-
-        min_x = x - ext_x
-        max_x = x + ext_x
-        min_y = y - ext_y
-        max_y = y + ext_y
-
-        return torch.stack([min_x, max_x, min_y, max_y], dim=-1)
-
-    def _improved_sampling_iou(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
-        """Compute IoU using sampling strategy."""
-        N = boxes1.shape[0]
-        device = boxes1.device
-
-        if N == 0:
-            return torch.empty(0, device=device, dtype=boxes1.dtype)
+        if M == 0:
+            return torch.empty(0, device=device, dtype=pred_boxes.dtype)
 
         # Box areas
-        area1 = boxes1[:, 2] * boxes1[:, 3]
-        area2 = boxes2[:, 2] * boxes2[:, 3]
+        area1 = pred_boxes[:, 2] * pred_boxes[:, 3]
+        area2 = target_boxes[:, 2] * target_boxes[:, 3]
 
         # Adaptive sample count based on box sizes
-        intersection_areas = self._estimate_intersection_area(boxes1, boxes2, self.base_samples)
+        intersection_areas = self._estimate_intersection_area(pred_boxes, target_boxes, self.base_samples)
 
         # Compute IoU
         union_areas = area1 + area2 - intersection_areas
