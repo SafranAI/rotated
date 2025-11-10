@@ -45,14 +45,14 @@ class PPYOLOERHead(nn.Module):
 
     def __init__(
         self,
-        in_channels: Sequence[int] = (192, 384, 768),  # P3', P4', P5' (shallow → deep)
+        in_channels: Sequence[int] = (192, 384, 768),  # P3', P4', P5' (shallow -> deep)
         num_classes: int = 15,
         act: str = "swish",
-        fpn_strides: Sequence[int] = (8, 16, 32),  # P3, P4, P5 (shallow → deep)
+        fpn_strides: Sequence[int] = (8, 16, 32),  # P3, P4, P5 (shallow -> deep)
         grid_cell_offset: float = 0.5,
         angle_max: int = 90,
         cache_anchors: bool = True,
-        criterion: nn.Module = None,
+        criterion: nn.Module | None = None,
     ):
         super().__init__()
 
@@ -134,7 +134,7 @@ class PPYOLOERHead(nn.Module):
         """Generate anchor points with optional caching for efficiency.
 
         Args:
-            feats: Feature maps [P3', P4', P5'] (shallow → deep order)
+            feats: Feature maps [P3', P4', P5'] (shallow -> deep order)
 
         Returns:
             anchor_points: Anchor point coordinates [1, N, 2]
@@ -235,17 +235,22 @@ class PPYOLOERHead(nn.Module):
         Uses raw predictions internally for criterion interface.
 
         Args:
-            feats: Feature maps [P3', P4', P5'] from neck (shallow → deep)
+            feats: Feature maps [P3', P4', P5'] from neck (shallow -> deep)
             targets: Training targets (optional):
                 - labels: [B, M, 1] - Class labels
-                - boxes: [B, M, 5] - Rotated boxes (cx, cy, w, h, angle) in absolute pixels, angle in radians [0, π/2)
+                - boxes: [B, M, 5] - Rotated boxes [cx, cy, w, h, angle]
+                    * cx, cy, w, h: in absolute pixels
+                    * angle: in radians, should be in range [0, π/2)
                 - valid_mask: [B, M, 1] - Valid target mask
 
         Returns:
             Tuple of (losses, cls_scores, decoded_boxes):
                 - losses: Loss dictionary if targets provided, None otherwise
                 - cls_scores: [B, N, C] - Classification scores (post-sigmoid)
-                - decoded_boxes: [B, N, 5] - Decoded rotated boxes in absolute pixels
+                - decoded_boxes: [B, N, 5] - Decoded rotated boxes in absolute pixels, angle in [0, π/2)
+
+        Raises:
+            ValueError: If feats length doesn't match fpn_strides length, or if criterion is None when targets are provided
         """
         if len(feats) != len(self.fpn_strides):
             raise ValueError(f"feats length {len(feats)} must equal fpn_strides length {len(self.fpn_strides)}")
