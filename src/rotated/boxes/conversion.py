@@ -2,61 +2,6 @@ import numpy as np
 import torch
 
 
-def standard_to_opencv_format(
-    center_x: float, center_y: float, width: float, height: float, angle_rad: float
-) -> tuple[float, float, float, float, float]:
-    """Convert standard OBB format to OpenCV format using OpenCV's minAreaRect.
-
-    Uses OpenCV's actual minAreaRect function to ensure exact compatibility
-    with OpenCV's angle computation behavior. This is the most reliable approach
-    as it matches OpenCV's internal algorithm exactly.
-
-    Args:
-        center_x: X coordinate of rectangle center.
-        center_y: Y coordinate of rectangle center.
-        width: Width of the rectangle.
-        height: Height of the rectangle.
-        angle_rad: Rotation angle in radians, range [-π/2, π/2].
-
-    Returns:
-        Tuple containing (center_x, center_y, opencv_width, opencv_height, opencv_angle_deg)
-        where opencv_angle_deg is in range [0, 90) degrees.
-    """
-    import math
-
-    import cv2
-
-    # Convert OBB to corner points
-    cos_a = math.cos(angle_rad)
-    sin_a = math.sin(angle_rad)
-
-    # Half dimensions
-    w2, h2 = width / 2, height / 2
-
-    # Corner points relative to center (before rotation)
-    corners_local = np.array(
-        [
-            [-w2, -h2],  # bottom-left
-            [w2, -h2],  # bottom-right
-            [w2, h2],  # top-right
-            [-w2, h2],  # top-left
-        ]
-    )
-
-    # Rotation matrix
-    rotation_matrix = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
-
-    # Rotate and translate corners
-    corners_rotated = np.dot(corners_local, rotation_matrix.T)
-    corners_global = corners_rotated + np.array([center_x, center_y])
-
-    # Use OpenCV's minAreaRect to get the exact result
-    opencv_result = cv2.minAreaRect(corners_global.astype(np.float32))
-    opencv_center, opencv_size, opencv_angle = opencv_result
-
-    return opencv_center[0], opencv_center[1], opencv_size[0], opencv_size[1], opencv_angle
-
-
 def obb_to_corners_format(obb_tensor: torch.Tensor, degrees: bool = True) -> torch.Tensor:
     """Convert 5-coordinate format to 8 corner coordinates.
 
@@ -111,47 +56,6 @@ def obb_to_corners_format(obb_tensor: torch.Tensor, degrees: bool = True) -> tor
     # Translate to final position
     center = torch.stack([center_x, center_y], dim=-1).unsqueeze(-2)  # (..., 1, 2)
     return corners_rotated + center
-
-
-def opencv_to_standard_format(obb_tensor: torch.Tensor) -> torch.Tensor:
-    """Convert OpenCV format back to standard OBB format.
-
-    Transforms from OpenCV minAreaRect format with angle in [0°, 90°) degrees
-    back to standard oriented bounding box format with angle in [-π/2, π/2] radians.
-    Works with any batch dimensions.
-
-    Args:
-        obb_tensor: Tensor of shape (..., 5) containing
-                   [center_x, center_y, width, height, opencv_angle_deg].
-
-    Returns:
-        Tensor of shape (..., 5) containing
-        [center_x, center_y, width, height, angle_rad]
-        where angle_rad is in range [-π/2, π/2] radians.
-    """
-    center_x = obb_tensor[..., 0]
-    center_y = obb_tensor[..., 1]
-    width = obb_tensor[..., 2]
-    height = obb_tensor[..., 3]
-    opencv_angle_deg = obb_tensor[..., 4]
-
-    # Determine if dimension swap occurred: if width < height
-    width_lt_height = width < height
-
-    # Compute standard angle
-    standard_angle_deg = torch.where(
-        width_lt_height,
-        opencv_angle_deg - 90,  # Subtract 90° if dimensions were swapped
-        opencv_angle_deg,  # Use as-is if no swap
-    )
-
-    # Convert to radians
-    angle_rad = torch.deg2rad(standard_angle_deg)
-
-    # Stack results
-    result = torch.stack([center_x, center_y, width, height, angle_rad], dim=-1)
-
-    return result
 
 
 def corners_to_standard_format(corners_tensor: torch.Tensor) -> torch.Tensor:
