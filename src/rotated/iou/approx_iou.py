@@ -1,10 +1,10 @@
 """Rotated IoU Approximation with Sampling Strategy.
 
-Uses adaptive and stratified sampling to improve accuracy over uniform random sampling."""
+Uses stratified sampling to improve accuracy over uniform random sampling."""
 
 import torch
 
-from rotated.boxes.utils import check_aabb_overlap, compute_aabb_bounds
+from rotated.boxes.utils import check_aabb_overlap, check_points_in_rotated_boxes_paired, compute_aabb_bounds
 
 
 # NOTE: Not relying on a Base class as we encountered issues with
@@ -133,8 +133,8 @@ class ApproxRotatedIoU:
         samples = torch.stack([samples_x, samples_y], dim=-1)  # (N, total_samples, 2)
 
         # Check if samples are in both boxes
-        in_box1 = self._points_in_rotated_boxes(samples, box1)
-        in_box2 = self._points_in_rotated_boxes(samples, box2)
+        in_box1 = check_points_in_rotated_boxes_paired(samples, box1)
+        in_box2 = check_points_in_rotated_boxes_paired(samples, box2)
 
         intersection_count = (in_box1 & in_box2).sum(-1).float()
 
@@ -143,32 +143,3 @@ class ApproxRotatedIoU:
         intersection_area = (intersection_count / total_samples) * sampling_region_area[:, 0]
 
         return intersection_area
-
-    def _points_in_rotated_boxes(self, points: torch.Tensor, boxes: torch.Tensor) -> torch.Tensor:
-        """Check if points are inside rotated boxes.
-
-        Args:
-            points: Tensor of shape (N, num_samples, 2)
-            boxes: Tensor of shape (N, 5)
-
-        Returns:
-            Boolean tensor indicating if points are inside boxes
-        """
-
-        # Transform points to box-local coordinates
-        N, num_samples = points.shape[:2]
-        local_points = points - boxes[:, :2].repeat((1, num_samples)).reshape(N, num_samples, 2)
-
-        # Rotate points to align with box axes
-        cos_a = torch.cos(-boxes[:, 4]).repeat_interleave(num_samples).reshape(N, num_samples)
-        sin_a = torch.sin(-boxes[:, 4]).repeat_interleave(num_samples).reshape(N, num_samples)
-
-        rotated_x = local_points[:, :, 0] * cos_a - local_points[:, :, 1] * sin_a
-        rotated_y = local_points[:, :, 0] * sin_a + local_points[:, :, 1] * cos_a
-
-        # Check if within box bounds
-        half_w, half_h = boxes[:, 2] * 0.5, boxes[:, 3] * 0.5
-        inside_x = torch.abs(rotated_x) <= half_w.repeat_interleave(num_samples).reshape(N, num_samples)
-        inside_y = torch.abs(rotated_y) <= half_h.repeat_interleave(num_samples).reshape(N, num_samples)
-
-        return inside_x & inside_y
