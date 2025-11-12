@@ -4,7 +4,7 @@ Uses adaptive and stratified sampling to improve accuracy over uniform random sa
 
 import torch
 
-from rotated.boxes.utils import check_aabb_overlap
+from rotated.boxes.utils import check_aabb_overlap, compute_aabb_bounds
 
 
 # NOTE: Not relying on a Base class as we encountered issues with
@@ -73,7 +73,7 @@ class ApproxRotatedIoU:
         area1 = pred_boxes[:, 2] * pred_boxes[:, 3]
         area2 = target_boxes[:, 2] * target_boxes[:, 3]
 
-        # Adaptive sample count based on box sizes
+        # Intersection estimation based on random sampling
         intersection_areas = self._estimate_intersection_area(pred_boxes, target_boxes, self.base_samples)
 
         # Compute IoU
@@ -91,8 +91,8 @@ class ApproxRotatedIoU:
         N = box1.shape[0]
 
         # Get the intersection region bounds
-        bounds1 = self._compute_multi_box_bounds(box1)
-        bounds2 = self._compute_multi_box_bounds(box2)
+        bounds1 = compute_aabb_bounds(box1)
+        bounds2 = compute_aabb_bounds(box2)
 
         # Simpler stratified sampling - use reasonable grid size
         grid_size = min(int((num_samples / 100) ** 0.5), 20)  # Cap at 20x20 grid
@@ -101,10 +101,10 @@ class ApproxRotatedIoU:
         total_samples = grid_size**2 * 4  # 4 samples per cell
 
         # Intersection bounds
-        min_x = torch.max(bounds1[0], bounds2[0]).repeat_interleave(total_samples).reshape(N, total_samples)
-        max_x = torch.min(bounds1[1], bounds2[1]).repeat_interleave(total_samples).reshape(N, total_samples)
-        min_y = torch.max(bounds1[2], bounds2[2]).repeat_interleave(total_samples).reshape(N, total_samples)
-        max_y = torch.min(bounds1[3], bounds2[3]).repeat_interleave(total_samples).reshape(N, total_samples)
+        min_x = torch.max(bounds1[:, 0], bounds2[:, 0]).repeat_interleave(total_samples).reshape(N, total_samples)
+        max_x = torch.min(bounds1[:, 1], bounds2[:, 1]).repeat_interleave(total_samples).reshape(N, total_samples)
+        min_y = torch.max(bounds1[:, 2], bounds2[:, 2]).repeat_interleave(total_samples).reshape(N, total_samples)
+        max_y = torch.min(bounds1[:, 3], bounds2[:, 3]).repeat_interleave(total_samples).reshape(N, total_samples)
 
         # Create grid coordinates
         i_coords = (
@@ -143,16 +143,6 @@ class ApproxRotatedIoU:
         intersection_area = (intersection_count / total_samples) * sampling_region_area[:, 0]
 
         return intersection_area
-
-    def _compute_multi_box_bounds(self, boxes: torch.Tensor) -> tuple:
-        """Compute AABB bounds for a boxes."""
-        x, y, w, h, angle = boxes.unbind(-1)
-        cos_a, sin_a = torch.cos(angle), torch.sin(angle)
-
-        ext_x = 0.5 * (w * torch.abs(cos_a) + h * torch.abs(sin_a))
-        ext_y = 0.5 * (w * torch.abs(sin_a) + h * torch.abs(cos_a))
-
-        return (x - ext_x), (x + ext_x), (y - ext_y), (y + ext_y)
 
     def _points_in_rotated_boxes(self, points: torch.Tensor, boxes: torch.Tensor) -> torch.Tensor:
         """Check if points are inside rotated boxes.
