@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 
 from rotated.backbones import CSPResNet
+from rotated.losses.ppyoloer_criterion import LossComponents
 from rotated.models.ppyoloer import PPYOLOER, create_ppyoloer_model
 from rotated.nn.custom_pan import CustomCSPPAN
 from rotated.nn.ppyoloer_head import PPYOLOERHead
@@ -37,7 +38,7 @@ def test_ppyoloer_forward_inference():
         losses, decoded_boxes, scores, labels = model(test_images)
 
     # Verify inference outputs
-    assert losses is None
+    torch.testing.assert_close(losses.total, torch.tensor(0.0))
     assert decoded_boxes.shape[0] == batch_size
     assert decoded_boxes.shape[2] == 5  # [cx, cy, w, h, angle]
     assert scores.shape[0] == batch_size
@@ -75,19 +76,21 @@ def test_ppyoloer_forward_training():
 
     # Verify training outputs
     assert losses is not None
-    assert isinstance(losses, dict)
-    assert "total" in losses
-    assert "cls" in losses
-    assert "box" in losses
-    assert "angle" in losses
+    assert isinstance(losses, LossComponents)
 
-    # Verify loss values
-    for loss_name, loss_value in losses.items():
-        assert torch.isfinite(loss_value), f"{loss_name} loss is not finite"
-        assert loss_value >= 0, f"{loss_name} loss is negative"
+    # Verify loss components are valid
+    assert torch.isfinite(losses.total), "Total loss is not finite"
+    assert torch.isfinite(losses.cls), "Classification loss is not finite"
+    assert torch.isfinite(losses.box), "Box loss is not finite"
+    assert torch.isfinite(losses.angle), "Angle loss is not finite"
+
+    assert losses.total >= 0, "Total loss is negative"
+    assert losses.cls >= 0, "Classification loss is negative"
+    assert losses.box >= 0, "Box loss is negative"
+    assert losses.angle >= 0, "Angle loss is negative"
 
     # Test backward pass
-    losses["total"].backward()
+    losses.total.backward()
 
     # Verify some gradients exist
     has_gradients = False
@@ -191,7 +194,7 @@ def test_export_with_backbone_no_export():
     # Test forward still works
     x = torch.randn(1, 3, 640, 640)
     losses, _, scores, _ = model(x)
-    assert losses is None
+    torch.testing.assert_close(losses.total, torch.tensor(0.0))
     assert scores.shape[0] == 1
 
 

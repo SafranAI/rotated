@@ -25,7 +25,7 @@ def test_ppyoloer_head_forward_inference():
         losses, cls_scores, decoded_boxes = head(test_features)
 
     # Verify inference outputs
-    assert losses is None
+    torch.testing.assert_close(losses.total, torch.tensor(0.0))
 
     expected_anchors = sum((img_size // stride) ** 2 for stride in fpn_strides)
     assert cls_scores.shape == (batch_size, expected_anchors, num_classes)
