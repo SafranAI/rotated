@@ -51,7 +51,7 @@ class PPYOLOER(nn.Module):
                 - boxes: [B, M, 5] - Rotated boxes [cx, cy, w, h, angle]
                     * cx, cy: Center coordinates in absolute pixels
                     * w, h: Width and height in absolute pixels
-                    * angle: Rotation angle in radians [0, Ï€/2)
+                    * angle: Rotation angle in radians [0, π/2)
                 - valid_mask: [B, M, 1] - Valid target mask (1.0=valid, 0.0=pad)
 
         Returns:
