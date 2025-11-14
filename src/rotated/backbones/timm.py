@@ -20,6 +20,10 @@ class TimmBackbone(Backbone):
         pretrained: Whether to load ImageNet pre-trained weights
         return_levels: Which feature levels to return (0=highest res, 4=lowest res)
         **kwargs: Additional arguments passed to timm.create_model
+
+    Raises:
+        ImportError: If timm is not installed
+        ValueError: If model_name is empty or return_levels is invalid
     """
 
     def __init__(
