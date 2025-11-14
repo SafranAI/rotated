@@ -1,4 +1,5 @@
 import math
+import warnings
 
 import pytest
 import torch
@@ -255,3 +256,41 @@ def test_ppyoloer_export_requires_eval():
 
     with pytest.raises(RuntimeError, match="Model must be in eval mode before export."):
         model.export()
+
+
+def test_torchscript_tracing():
+    """Test TorchScript tracing with varying batch sizes."""
+    # Suppress specific TracerWarnings about:
+    # 1. Data flow from anchors generation with fixed image size
+    # 2. Constant losses during inference
+    warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
+
+    model = create_ppyoloer_model(num_classes=15)
+    model.eval()
+    model.export()
+
+    # Trace with batch_size=1
+    dummy_input = torch.randn(1, 3, 640, 640)
+    traced_model = torch.jit.trace(model, dummy_input)
+
+    # Test with different batch sizes
+    for batch_size in [1, 2, 4]:
+        test_input = torch.randn(batch_size, 3, 640, 640)
+
+        with torch.no_grad():
+            # Original model
+            _, boxes_orig, scores_orig, labels_orig = model(test_input)
+            # Traced model
+            _, boxes_trace, scores_trace, labels_trace = traced_model(test_input)
+
+        # Verify outputs match
+        assert torch.allclose(boxes_orig, boxes_trace, atol=1e-4), f"Boxes mismatch for batch_size={batch_size}"
+        assert torch.allclose(scores_orig, scores_trace, atol=1e-4), f"Scores mismatch for batch_size={batch_size}"
+        assert torch.equal(labels_orig, labels_trace), f"Labels mismatch for batch_size={batch_size}"
+
+        # Verify shapes
+        assert boxes_orig.shape[0] == batch_size
+        assert scores_orig.shape[0] == batch_size
+        assert labels_orig.shape[0] == batch_size
+
+    warnings.resetwarnings()
