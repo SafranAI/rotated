@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from rotated.backbones.base import Backbone
 from rotated.nn.common import ConvBNLayer
 
 
@@ -246,7 +247,7 @@ class CSPResStage(nn.Module):
         return output_tensor
 
 
-class CSPResNet(nn.Module):
+class CSPResNet(Backbone):
     """Cross Stage Partial ResNet backbone for object detection.
 
     Feature levels correspond to stages after the stem:
@@ -271,7 +272,7 @@ class CSPResNet(nn.Module):
         use_alpha: bool = False,
         use_checkpoint: bool = False,
     ):
-        super().__init__()
+        super().__init__(return_levels=return_levels)
 
         # Validation
         if not layers or any(layer <= 0 for layer in layers):
@@ -349,10 +350,12 @@ class CSPResNet(nn.Module):
 
         return outs
 
+    @torch.jit.unused
     @property
     def out_channels(self) -> list[int]:
         return [self._out_channels[level_idx] for level_idx in self.return_levels]
 
+    @torch.jit.unused
     @property
     def out_strides(self) -> list[int]:
         return [self._out_strides[level_idx] for level_idx in self.return_levels]

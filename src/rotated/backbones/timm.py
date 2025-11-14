@@ -1,7 +1,8 @@
 from collections.abc import Sequence
 
 import torch
-import torch.nn as nn
+
+from rotated.backbones.base import Backbone
 
 try:
     import timm
@@ -11,7 +12,7 @@ except ImportError:
     TIMM_AVAILABLE = False
 
 
-class TimmBackbone(nn.Module):
+class TimmBackbone(Backbone):
     """TIMM backbone wrapper with consistent feature extraction interface.
 
     Args:
@@ -28,7 +29,7 @@ class TimmBackbone(nn.Module):
         return_levels: Sequence[int] = (2, 3, 4),  # Typically stride 8, 16, 32
         **kwargs,
     ):
-        super().__init__()
+        super().__init__(return_levels=return_levels)
 
         if not TIMM_AVAILABLE:
             raise ImportError("timm is required for TimmBackbone. Install with: pip install timm")
@@ -65,10 +66,12 @@ class TimmBackbone(nn.Module):
         all_features = self.model(input_tensor)
         return [all_features[level_idx] for level_idx in self.return_levels]
 
+    @torch.jit.unused
     @property
     def out_channels(self) -> list[int]:
         return self._out_channels.copy()
 
+    @torch.jit.unused
     @property
     def out_strides(self) -> list[int]:
         return self._out_strides.copy()
