@@ -1,6 +1,7 @@
 # Modified from PaddleDetection (https://github.com/PaddlePaddle/PaddleDetection)
 # Copyright (c) 2024 PaddlePaddle Authors. Apache 2.0 License.
 
+from collections import namedtuple
 import math
 
 import torch
@@ -10,6 +11,21 @@ import torch.nn.functional as F
 from rotated.assigners import RotatedTaskAlignedAssigner
 from rotated.boxes.decode import decode_ppyoloer_boxes
 from rotated.losses.prob_iou import ProbIoULoss
+
+
+class LossComponents(namedtuple("LossComponents", ["total", "cls", "box", "angle"])):
+    """Named tuple for PP-YOLOE-R loss components with helper methods."""
+
+    @classmethod
+    def empty(cls, device: torch.device | str | None = None) -> "LossComponents":
+        """Create empty loss components with proper device placement."""
+        device = device or torch.device("cpu")
+        return cls(
+            total=torch.tensor(0.0, device=device),
+            cls=torch.tensor(0.0, device=device),
+            box=torch.tensor(0.0, device=device),
+            angle=torch.tensor(0.0, device=device),
+        )
 
 
 class RotatedDetectionLoss(nn.Module):
@@ -58,7 +74,7 @@ class RotatedDetectionLoss(nn.Module):
         anchor_points: torch.Tensor,
         stride_tensor: torch.Tensor,
         angle_proj: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
+    ) -> LossComponents:
         """Compute detection losses using only raw predictions.
 
         Args:
@@ -120,7 +136,7 @@ class RotatedDetectionLoss(nn.Module):
             + self.loss_weights["angle"] * loss_angle
         )
 
-        return {"total": total_loss, "cls": loss_cls, "box": loss_box, "angle": loss_angle}
+        return LossComponents(total=total_loss, cls=loss_cls, box=loss_box, angle=loss_angle)
 
     def _classification_loss(
         self, pred_logits: torch.Tensor, target_scores: torch.Tensor, target_labels: torch.Tensor
@@ -250,7 +266,7 @@ class RotatedDetectionLoss(nn.Module):
 
     def _empty_losses(
         self, cls_logits: torch.Tensor, reg_dist: torch.Tensor, raw_angles: torch.Tensor
-    ) -> dict[str, torch.Tensor]:
+    ) -> LossComponents:
         """Return zero losses maintaining gradient flow for empty targets.
 
         Args:
@@ -259,7 +275,7 @@ class RotatedDetectionLoss(nn.Module):
             raw_angles: Raw angle logits
 
         Returns:
-            Dictionary with zero losses that maintain gradient computation
+            Named tuple with zero losses that maintain gradient computation
         """
         loss_cls = cls_logits.sum() * 0.0
         loss_box = reg_dist.sum() * 0.0
@@ -267,4 +283,4 @@ class RotatedDetectionLoss(nn.Module):
 
         total_loss = loss_cls + loss_box + loss_angle
 
-        return {"total": total_loss, "cls": loss_cls, "box": loss_box, "angle": loss_angle}
+        return LossComponents(total=total_loss, cls=loss_cls, box=loss_box, angle=loss_angle)
