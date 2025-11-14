@@ -2,7 +2,9 @@
 # https://github.com/huggingface/transformers/blob/main/src/transformers/pytorch_utils.py
 # Apache 2.0 License
 
+from collections.abc import Callable
 from functools import lru_cache, wraps
+from typing import Any, TypeVar
 
 
 def is_torchdynamo_compiling() -> bool:
@@ -69,7 +71,7 @@ def is_jit_scripting() -> bool:
         return False
 
 
-def is_tracing(tensor=None) -> bool:
+def is_tracing(tensor: Any = None) -> bool:
     """Check if tracing a graph with dynamo (compile or export), torch.jit, or torch.fx.
 
     Args:
@@ -84,8 +86,11 @@ def is_tracing(tensor=None) -> bool:
     return _is_tracing
 
 
+F = TypeVar("F", bound=Callable[..., Any])
+
+
 @wraps(lru_cache)
-def compile_compatible_lru_cache(*lru_args, **lru_kwargs):
+def compile_compatible_lru_cache(*lru_args: Any, **lru_kwargs: Any) -> Callable[[F], F]:
     """LRU cache decorator that disables caching during compilation/tracing.
 
     This decorator wraps functools.lru_cache but disables caching when:

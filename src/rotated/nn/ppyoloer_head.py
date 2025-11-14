@@ -49,6 +49,7 @@ class PPYOLOERHead(nn.Module):
         fpn_strides: Strides for each FPN level (P3, P4, P5)
         grid_cell_offset: Grid cell offset for anchor point generation
         angle_max: Number of angle bins for orientation prediction, considering π/2 as the maximum angle
+        criterion: Loss criterion module to use during training
 
     Raises:
         ValueError: If num_classes is not positive, angle_max is not positive, or channel counts are invalid
