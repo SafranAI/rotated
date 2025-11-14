@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 from rotated.backbones import CSPResNet
-from rotated.losses.ppyoloer_criterion import RotatedDetectionLoss
+from rotated.losses.ppyoloer_criterion import LossComponents, RotatedDetectionLoss
 from rotated.nn.custom_pan import CustomCSPPAN
 from rotated.nn.postprocessor import DetectionPostProcessor
 from rotated.nn.ppyoloer_head import PPYOLOERHead
@@ -28,7 +28,7 @@ class PPYOLOER(nn.Module):
         self,
         backbone: nn.Module,
         neck: nn.Module,
-        head: nn.Module,
+        head: PPYOLOERHead,
         postprocessor: DetectionPostProcessor | None = None,
     ):
         super().__init__()
@@ -41,7 +41,7 @@ class PPYOLOER(nn.Module):
         self,
         images: torch.Tensor,
         targets: dict[str, torch.Tensor] = None,
-    ) -> tuple[dict[str, torch.Tensor] | None, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[LossComponents, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass through the complete architecture.
 
         Args:
@@ -51,12 +51,12 @@ class PPYOLOER(nn.Module):
                 - boxes: [B, M, 5] - Rotated boxes [cx, cy, w, h, angle]
                     * cx, cy: Center coordinates in absolute pixels
                     * w, h: Width and height in absolute pixels
-                    * angle: Rotation angle in radians [0, π/2)
+                    * angle: Rotation angle in radians [0, Ï€/2)
                 - valid_mask: [B, M, 1] - Valid target mask (1.0=valid, 0.0=pad)
 
         Returns:
-            Tuple of (losses, scores, boxes, labels):
-                - losses: Loss dictionary if targets provided, None otherwise
+            Tuple of (losses, boxes, scores, labels):
+                - losses: Named tuple of loss components (empty with zeros during inference)
                 - boxes: [B, K, 5] or [B, N, 5] - Detection boxes (post-NMS if postprocessor set)
                 - scores: [B, K] - Detection scores (post-NMS if postprocessor set, else max class scores [B, N])
                 - labels: [B, K] or [B, N] - Detection labels (predicted class indices)
