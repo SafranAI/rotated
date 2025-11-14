@@ -9,7 +9,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from rotated.boxes.decode import decode_ppyoloer_boxes
+from rotated.losses.ppyoloer_criterion import LossComponents
 from rotated.nn.common import ConvBNLayer
+from rotated.utils.export import compile_compatible_lru_cache
 
 
 class ESEAttn(nn.Module):
@@ -36,23 +38,36 @@ class ESEAttn(nn.Module):
 
 
 class PPYOLOERHead(nn.Module):
-    """PP-YOLOE-R Detection Head with unified forward logic.
+    """PP-YOLOE-R Detection Head with TorchScript-compatible caching.
 
-    Head returns raw predictions for training and processed predictions for inference.
-    Training mode: Returns (losses, cls_logits, reg_dist)
-    Inference mode: Returns (losses, cls_scores, decoded_boxes)
+    Head always returns decoded boxes, either during training or inference.
+
+    Args:
+        in_channels: Number of input channels for each FPN level (P3', P4', P5')
+        num_classes: Number of object classes
+        act: Activation function name
+        fpn_strides: Strides for each FPN level (P3, P4, P5)
+        grid_cell_offset: Grid cell offset for anchor point generation
+        angle_max: Number of angle bins for orientation prediction, considering π/2 as the maximum angle
+
+    Raises:
+        ValueError: If num_classes is not positive, angle_max is not positive, or channel counts are invalid
+
+    Note:
+        The head is compatible with TorchScript through tracing.
+        Due to the way the anchors are generated, the head is not compatible with varying input shapes. The input
+        shapes are fixed at export time.
     """
 
     def __init__(
         self,
-        in_channels: Sequence[int] = (192, 384, 768),  # P3', P4', P5' (shallow -> deep)
+        in_channels: Sequence[int] = (192, 384, 768),  # P3', P4', P5' (shallow → deep)
         num_classes: int = 15,
         act: str = "swish",
-        fpn_strides: Sequence[int] = (8, 16, 32),  # P3, P4, P5 (shallow -> deep)
+        fpn_strides: Sequence[int] = (8, 16, 32),  # P3, P4, P5 (shallow → deep)
         grid_cell_offset: float = 0.5,
         angle_max: int = 90,
-        cache_anchors: bool = True,
-        criterion: nn.Module | None = None,
+        criterion: nn.Module = None,
     ):
         super().__init__()
 
@@ -74,7 +89,6 @@ class PPYOLOERHead(nn.Module):
         self.num_classes = num_classes
         self.grid_cell_offset = grid_cell_offset
         self.angle_max = angle_max
-        self.cache_anchors = cache_anchors
         self.criterion = criterion
 
         # Angle-related constants
@@ -105,9 +119,6 @@ class PPYOLOERHead(nn.Module):
             self.pred_reg.append(nn.Conv2d(in_c, 4, 3, padding=1))
             self.pred_angle.append(nn.Conv2d(in_c, self.angle_max + 1, 3, padding=1))
 
-        # Cache for anchor points and metadata
-        self._anchor_cache = {}
-
         self._init_weights()
 
     def _init_weights(self):
@@ -130,35 +141,36 @@ class PPYOLOERHead(nn.Module):
             nn.init.constant_(angle_head.weight, 0)
             angle_head.bias.data = torch.tensor(bias_angle, dtype=torch.float32)
 
-    def _generate_anchors(self, feats: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor, list[int]]:
-        """Generate anchor points with optional caching for efficiency.
+    # NOTE: This makes the export not compatible with inputs of varying shapes
+    # Since we rely on hashable shapes, which requires passing those as ints, we have
+    # to cast the shapes to tuples of ints. This breaks the ability to export with dynamic shapes.
+    @compile_compatible_lru_cache(maxsize=8)
+    def _generate_anchors_cached(
+        self, shapes: tuple[tuple[int, int], ...], device_str: str, dtype: torch.dtype
+    ) -> tuple[torch.Tensor, torch.Tensor, list[int]]:
+        """Actual anchor generation with compile-compatible caching.
 
         Args:
-            feats: Feature maps [P3', P4', P5'] (shallow -> deep order)
+            shapes: Feature map shapes as ((h1, w1), (h2, w2), (h3, w3))
+            device_str: Device as string for hashability
+            dtype: Tensor dtype
 
         Returns:
             anchor_points: Anchor point coordinates [1, N, 2]
             stride_tensor: Stride values for each anchor [1, N, 1]
             num_anchors_list: Number of anchors per FPN level
         """
-        # Create cache key based on feature sizes and device
-        cache_key = tuple((f.shape[2], f.shape[3], str(f.device)) for f in feats)
-
-        if self.cache_anchors and cache_key in self._anchor_cache:
-            return self._anchor_cache[cache_key]
+        device = torch.device(device_str)
 
         anchor_points = []
         stride_tensor = []
         num_anchors_list = []
 
         # Process in input order: P3', P4', P5' with strides 8, 16, 32
-        for feat, stride in zip(feats, self.fpn_strides, strict=True):
-            batch_size, channels, height, width = feat.shape
-
+        for (height, width), stride in zip(shapes, self.fpn_strides, strict=True):
             # Generate grid coordinates
-            device = feat.device
-            shift_x = torch.arange(width, device=device, dtype=torch.float32)
-            shift_y = torch.arange(height, device=device, dtype=torch.float32)
+            shift_x = torch.arange(width, device=device, dtype=dtype)
+            shift_y = torch.arange(height, device=device, dtype=dtype)
 
             shift_x = (shift_x + self.grid_cell_offset) * stride
             shift_y = (shift_y + self.grid_cell_offset) * stride
@@ -167,25 +179,38 @@ class PPYOLOERHead(nn.Module):
             anchor_point = torch.stack([shift_x, shift_y], dim=-1).view(1, -1, 2)
             anchor_points.append(anchor_point)
 
-            stride_tensor.append(torch.full((1, height * width, 1), stride, device=device, dtype=torch.float32))
+            stride_tensor.append(torch.full((1, height * width, 1), stride, device=device, dtype=dtype))
             num_anchors_list.append(height * width)
 
         anchor_points = torch.cat(anchor_points, dim=1)
         stride_tensor = torch.cat(stride_tensor, dim=1)
 
-        result = (anchor_points, stride_tensor, num_anchors_list)
+        return anchor_points, stride_tensor, num_anchors_list
 
-        # Cache result if enabled
-        if self.cache_anchors:
-            self._anchor_cache[cache_key] = result
+    def _generate_anchors(self, feats: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor, list[int]]:
+        """TorchScript-safe wrapper that extracts hashable info and calls cached method.
 
-        return result
+        Args:
+            feats: Feature maps [P3', P4', P5'] (shallow → deep order)
+
+        Returns:
+            anchor_points: Anchor point coordinates [1, N, 2]
+            stride_tensor: Stride values for each anchor [1, N, 1]
+            num_anchors_list: Number of anchors per FPN level
+        """
+        # Extract shapes with explicit loop (TorchScript-safe)
+        shapes_list = []
+        for feat in feats:
+            shapes_list.append((int(feat.shape[2]), int(feat.shape[3])))
+        shapes = tuple(shapes_list)
+
+        device_str = str(feats[0].device)
+        dtype = feats[0].dtype
+
+        return self._generate_anchors_cached(shapes, device_str, dtype)
 
     def _forward_common(self, feats: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Unified forward logic generating only raw predictions.
-
-        Processes features through ESE attention and prediction heads,
-        returning raw predictions without any post-processing.
 
         Args:
             feats: Feature maps [P3', P4', P5'] from neck
@@ -228,29 +253,26 @@ class PPYOLOERHead(nn.Module):
 
     def forward(
         self, feats: Sequence[torch.Tensor], targets: dict[str, torch.Tensor] = None
-    ) -> tuple[dict[str, torch.Tensor] | None, torch.Tensor, torch.Tensor]:
-        """Unified forward pass with consistent API.
+    ) -> tuple[LossComponents, torch.Tensor, torch.Tensor]:
+        """Unified forward pass with TorchScript-compatible API.
 
-        Always returns decoded boxes and classification scores regardless of mode.
-        Uses raw predictions internally for criterion interface.
+        Always returns loss components (with zeros during inference) and decoded outputs.
 
         Args:
-            feats: Feature maps [P3', P4', P5'] from neck (shallow -> deep)
+            feats: Feature maps [P3', P4', P5'] from neck (shallow → deep)
             targets: Training targets (optional):
                 - labels: [B, M, 1] - Class labels
-                - boxes: [B, M, 5] - Rotated boxes [cx, cy, w, h, angle]
-                    * cx, cy, w, h: in absolute pixels
-                    * angle: in radians, should be in range [0, π/2)
+                - boxes: [B, M, 5] - Rotated boxes (cx, cy, w, h, angle)
                 - valid_mask: [B, M, 1] - Valid target mask
 
         Returns:
             Tuple of (losses, cls_scores, decoded_boxes):
-                - losses: Loss dictionary if targets provided, None otherwise
+                - losses: Loss components (empty with zeros during inference)
                 - cls_scores: [B, N, C] - Classification scores (post-sigmoid)
-                - decoded_boxes: [B, N, 5] - Decoded rotated boxes in absolute pixels, angle in [0, π/2)
+                - decoded_boxes: [B, N, 5] - Decoded rotated boxes
 
         Raises:
-            ValueError: If feats length doesn't match fpn_strides length, or if criterion is None when targets are provided
+            ValueError: If feature map count doesn't match FPN stride count or criterion not set during training
         """
         if len(feats) != len(self.fpn_strides):
             raise ValueError(f"feats length {len(feats)} must equal fpn_strides length {len(self.fpn_strides)}")
@@ -258,33 +280,22 @@ class PPYOLOERHead(nn.Module):
         # Generate raw predictions
         cls_logits, reg_dist, raw_angles = self._forward_common(feats)
 
-        # Generate anchor metadata
+        # Generate anchor metadata (uses TorchScript-safe wrapper)
         anchor_points, stride_tensor, _ = self._generate_anchors(feats)
 
         cls_scores = torch.sigmoid(cls_logits)
         decoded_boxes = decode_ppyoloer_boxes(anchor_points, reg_dist, raw_angles, stride_tensor, self.angle_proj)
 
         # Compute losses if targets provided
-        losses = None
         if targets is not None:
             if self.criterion is None:
-                raise ValueError("Criterion must be set to compute losses. Use set_criterion() or pass it to __init__")
+                raise ValueError("Criterion must be set to compute losses")
 
             losses = self.criterion(
                 cls_logits, reg_dist, raw_angles, targets, anchor_points, stride_tensor, self.angle_proj
             )
+        else:
+            # Return empty loss components for inference (TorchScript compatible)
+            losses = LossComponents.empty(cls_logits.device)
 
         return losses, cls_scores, decoded_boxes
-
-    def set_criterion(self, criterion: nn.Module):
-        """Set criterion for training mode."""
-        self.criterion = criterion
-
-    def get_anchors(self, feats: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
-        """Get anchor points and strides for external use."""
-        anchor_points, stride_tensor, _ = self._generate_anchors(feats)
-        return anchor_points, stride_tensor
-
-    def clear_cache(self):
-        """Clear anchor cache to free memory."""
-        self._anchor_cache.clear()
