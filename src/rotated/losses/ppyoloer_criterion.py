@@ -102,26 +102,19 @@ class RotatedDetectionLoss(nn.Module):
         gt_boxes = targets["boxes"]  # [B, M, 5]
         valid_mask = targets["valid_mask"]  # [B, M, 1]
 
-        batch_size, num_anchors = cls_logits.shape[:2]
-        num_targets = gt_boxes.shape[1]
-
-        # Handle empty targets
-        if num_targets == 0:
-            return self._empty_losses(cls_logits, reg_dist, raw_angles)
-
         # Process raw predictions for assignment
         cls_scores = torch.sigmoid(cls_logits)
         decoded_boxes = decode_ppyoloer_boxes(anchor_points, reg_dist, raw_angles, stride_tensor, angle_proj)
 
         # Task-aligned assignment using processed outputs
         assigned_labels, assigned_boxes, assigned_scores = self.assigner(
-            cls_scores.detach(),
-            decoded_boxes.detach(),
-            anchor_points,
-            gt_labels,
-            gt_boxes,
-            valid_mask,
-            self.num_classes,
+            pred_scores=cls_scores.detach(),
+            pred_boxes=decoded_boxes.detach(),
+            anchor_points=anchor_points,
+            gt_labels=gt_labels,
+            gt_boxes=gt_boxes,
+            pad_gt_mask=valid_mask,
+            bg_index=self.num_classes,
         )
 
         # Compute individual losses using raw predictions
@@ -263,24 +256,3 @@ class RotatedDetectionLoss(nn.Module):
         angle_loss = (loss_left + loss_right).mean()
 
         return angle_loss
-
-    def _empty_losses(
-        self, cls_logits: torch.Tensor, reg_dist: torch.Tensor, raw_angles: torch.Tensor
-    ) -> LossComponents:
-        """Return zero losses maintaining gradient flow for empty targets.
-
-        Args:
-            cls_logits: Classification logits
-            reg_dist: Distance predictions
-            raw_angles: Raw angle logits
-
-        Returns:
-            Named tuple with zero losses that maintain gradient computation
-        """
-        loss_cls = cls_logits.sum() * 0.0
-        loss_box = reg_dist.sum() * 0.0
-        loss_angle = raw_angles.sum() * 0.0
-
-        total_loss = loss_cls + loss_box + loss_angle
-
-        return LossComponents(total=total_loss, cls=loss_cls, box=loss_box, angle=loss_angle)
