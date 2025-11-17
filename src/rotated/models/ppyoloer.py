@@ -1,6 +1,8 @@
 # Modified from PaddleDetection (https://github.com/PaddlePaddle/PaddleDetection)
 # Copyright (c) 2024 PaddlePaddle Authors. Apache 2.0 License.
 
+from typing import Literal
+
 import torch
 import torch.nn as nn
 
@@ -84,26 +86,65 @@ class PPYOLOER(nn.Module):
             self.backbone.export()
 
 
-def create_ppyoloer_model(num_classes: int = 15, postprocessor: DetectionPostProcessor | None = None) -> PPYOLOER:
-    """Factory function to create a PP-YOLOE-R model with default configuration.
+PPYOLOERSize = Literal["s", "m", "l", "x"]
+
+PPYOLOER_CONFIGS = {
+    "s": {"depth_mult": 0.33, "width_mult": 0.50},
+    "m": {"depth_mult": 0.67, "width_mult": 0.75},
+    "l": {"depth_mult": 1.00, "width_mult": 1.00},
+    "x": {"depth_mult": 1.33, "width_mult": 1.25},
+}
+
+
+def create_ppyoloer_model(
+    num_classes: int = 15,
+    size: PPYOLOERSize = "s",
+    postprocessor: DetectionPostProcessor | None = None,
+) -> PPYOLOER:
+    """Factory function to create a PP-YOLOE-R model with specified size.
 
     Args:
-        num_classes: Number of object classes
-        postprocessor: Optional postprocessor for inference (with configurable IoU)
+        num_classes: Number of object classes to detect
+        size: Model size - "s" (small), "m" (medium), "l" (large), or "x" (extra large)
+            Larger models have better accuracy but require more compute
+        postprocessor: Optional postprocessor for inference-time NMS
 
     Returns:
-        Complete PP-YOLOE-R model ready for training/inference
+        Complete PP-YOLOE-R model
+
+    Raises:
+        ValueError: If an invalid size is provided
+
+    Examples:
+        >>> model = create_ppyoloer_model(num_classes=15, size="s")
+        >>> # With postprocessing for inference
+        >>> postprocessor = DetectionPostProcessor(score_threshold=0.01, iou_threshold=0.6)
+        >>> model = create_ppyoloer_model(num_classes=20, size="l", postprocessor=postprocessor)
     """
-    # Create backbone
+    size = size.lower()
+
+    if size not in PPYOLOER_CONFIGS:
+        valid_sizes = list(PPYOLOER_CONFIGS.keys())
+        raise ValueError(
+            f"Invalid size '{size}'. Must be one of {valid_sizes}. "
+            f"Choose 's' for small, 'm' for medium, 'l' for large, or 'x' for extra large."
+        )
+
+    config = PPYOLOER_CONFIGS[size]
+
+    # Create backbone with size-specific multipliers
     backbone = CSPResNet(
         layers=[3, 6, 6, 3],
         channels=[64, 128, 256, 512, 1024],
         return_levels=[1, 2, 3],  # Return P3, P4, P5 features
         use_large_stem=True,
         act="swish",
+        depth_mult=config["depth_mult"],
+        width_mult=config["width_mult"],
+        use_alpha=True,
     )
 
-    # Create neck
+    # Create neck (same configuration for all sizes)
     neck = CustomCSPPAN(
         in_channels=backbone.out_channels,
         out_channels=[192, 384, 768],
