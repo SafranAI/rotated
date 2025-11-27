@@ -43,6 +43,7 @@ class PPYOLOER(nn.Module):
         self,
         images: torch.Tensor,
         targets: dict[str, torch.Tensor] = None,
+        postprocess: bool = True,
     ) -> tuple[LossComponents, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass through the complete architecture.
 
@@ -55,6 +56,7 @@ class PPYOLOER(nn.Module):
                     * w, h: Width and height in absolute pixels
                     * angle: Rotation angle in radians [0, π/2)
                 - valid_mask: [B, M, 1] - Valid target mask (1.0=valid, 0.0=pad)
+            postprocess: Whether to apply post-processing (NMS)
 
         Returns:
             Tuple of (losses, boxes, scores, labels):
@@ -72,8 +74,8 @@ class PPYOLOER(nn.Module):
         max_scores, _ = torch.max(cls_scores, dim=-1)  # [B, N]
 
         # Apply post-processing if postprocessor exists (only during inference)
-        if self.postprocessor is not None and targets is None:
-            decoded_boxes, pred_labels, max_scores = self.postprocessor(decoded_boxes, max_scores, pred_labels)
+        if self.postprocessor is not None and postprocess:
+            decoded_boxes, max_scores, pred_labels = self.postprocessor(decoded_boxes, max_scores, pred_labels)
 
         return losses, decoded_boxes, max_scores, pred_labels
 
