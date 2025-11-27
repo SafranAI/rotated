@@ -28,6 +28,9 @@ class BaseTaskAlignedAssigner(nn.Module):
         alpha: Exponent for classification score in alignment computation
         beta: Exponent for IoU score in alignment computation
         eps: Small value to prevent division by zero
+
+    Raises:
+        ValueError: If box_format is not 'rotated' or 'horizontal'
     """
 
     def __init__(
