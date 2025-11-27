@@ -6,7 +6,7 @@ For CUDA acceleration, consider integrating with detectron2's rotated_iou operat
 
 import torch
 
-from rotated.iou.precise_iou import PreciseRotatedIoU
+from rotated.iou import ApproxSDFL1
 
 
 @torch.jit.script_if_tracing
@@ -27,7 +27,7 @@ def rotated_nms(boxes: torch.Tensor, scores: torch.Tensor, iou_threshold: float)
     _, order = torch.sort(scores, descending=True)
     keep_mask = torch.ones(boxes.size(0), dtype=torch.bool, device=boxes.device)
 
-    iou_calculator = PreciseRotatedIoU()
+    iou_calculator = ApproxSDFL1()
 
     for i in range(boxes.size(0)):
         if not keep_mask[order[i]]:

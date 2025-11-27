@@ -1,6 +1,8 @@
 # Modified from PaddleDetection (https://github.com/PaddlePaddle/PaddleDetection)
 # Copyright (c) 2024 PaddlePaddle Authors. Apache 2.0 License.
 
+from collections.abc import Callable
+
 import torch
 import torch.nn as nn
 
@@ -28,11 +30,14 @@ class BaseTaskAlignedAssigner(nn.Module):
         alpha: Exponent for classification score in alignment computation
         beta: Exponent for IoU score in alignment computation
         eps: Small value to prevent division by zero
+
+    Raises:
+        ValueError: If box_format is not 'rotated' or 'horizontal'
     """
 
     def __init__(
         self,
-        iou_calculator,
+        iou_calculator: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         box_format: str = "rotated",
         topk: int = 13,
         alpha: float = 1.0,
@@ -65,7 +70,7 @@ class BaseTaskAlignedAssigner(nn.Module):
 
         Args:
             pred_scores: [B, L, C] - Predicted classification scores after sigmoid
-            pred_boxes: [B, L, box_dim] - Predicted boxes (format depends on `box_format)`
+            pred_boxes: [B, L, box_dim] - Predicted boxes (format depends on `box_format`)
             anchor_points: [1, L, 2] - Anchor point coordinates
             gt_labels: [B, N, 1] - Ground truth class labels
             gt_boxes: [B, N, box_dim] - Ground truth boxes (format depends on `box_format`)
@@ -116,8 +121,7 @@ class BaseTaskAlignedAssigner(nn.Module):
         Returns:
             iou_matrix: [B, N, L] - IoU between each GT and predicted box pair
         """
-        batch_size, num_gts, box_dim = gt_boxes.shape
-        num_preds = pred_boxes.shape[1]
+        batch_size = gt_boxes.shape[0]
 
         # Process each batch separately to compute IoU matrices
         iou_matrices = []
@@ -133,11 +137,17 @@ class BaseTaskAlignedAssigner(nn.Module):
         # Stack all batch IoU matrices: [B, N, L]
         iou_matrix = torch.stack(iou_matrices, dim=0)
 
-        return torch.clamp(iou_matrix, max=1.0)
+        # Set IoU values > 1 + eps to 0 (treat as numerical errors), don't just clamp
+        iou_matrix = torch.where(iou_matrix > 1.0 + self.eps, torch.zeros_like(iou_matrix), iou_matrix)
+
+        return iou_matrix
 
     def _compute_spatial_mask(self, anchor_points: torch.Tensor, gt_boxes: torch.Tensor) -> torch.Tensor:
         """Compute spatial containment mask using box format."""
         batch_size, *_ = gt_boxes.shape
+
+        # Ensure anchor_points has the expected shape
+        assert anchor_points.shape[0] == 1, f"Expected anchor_points shape [1, L, 2], got {anchor_points.shape}"
 
         # Choose spatial checking function based on box format
         if self.box_format == "rotated":
@@ -154,20 +164,32 @@ class BaseTaskAlignedAssigner(nn.Module):
         return torch.stack(spatial_masks, dim=0)  # [B, N, L]
 
     def _gather_class_scores(self, pred_scores: torch.Tensor, gt_labels: torch.Tensor) -> torch.Tensor:
-        """Extract classification scores for ground truth classes."""
-        batch_size, num_preds, _ = pred_scores.shape
+        """Extract classification scores for ground truth classes.
+
+        Args:
+            pred_scores: [B, L, C] - Predicted class scores
+            gt_labels: [B, N, 1] - Ground truth class labels
+
+        Returns:
+            class_scores: [B, N, L] - Classification scores for GT classes at each anchor
+        """
+        batch_size, num_preds, num_classes = pred_scores.shape
         num_gts = gt_labels.shape[1]
+
+        # Clamp class indices to valid range to prevent index errors
+        gt_labels_clamped = gt_labels.squeeze(-1).clamp(0, num_classes - 1)
 
         # Create index tensors for advanced indexing
         batch_idx = torch.arange(batch_size, device=pred_scores.device)[:, None, None]
         pred_idx = torch.arange(num_preds, device=pred_scores.device)[None, None, :]
-        class_idx = gt_labels.squeeze(-1)[:, :, None]
+        class_idx = gt_labels_clamped[:, :, None]
 
-        # Expand indices to match output shape
+        # Expand indices to match output shape [B, N, L]
         batch_idx = batch_idx.expand(batch_size, num_gts, num_preds)
         pred_idx = pred_idx.expand(batch_size, num_gts, num_preds)
         class_idx = class_idx.expand(batch_size, num_gts, num_preds)
 
+        # Index: pred_scores[batch, pred, class] -> [B, N, L]
         return pred_scores[batch_idx, pred_idx, class_idx]
 
     def _select_topk(self, scores: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
@@ -249,12 +271,18 @@ class BaseTaskAlignedAssigner(nn.Module):
         assigned_scores = torch.zeros(batch_size, num_anchors, num_classes, device=mask.device)
 
         if has_assignment.any():
-            # Normalize alignment scores
-            max_alignment_per_gt = (alignment_scores * mask).amax(dim=-1, keepdim=True)  # [B, N, 1]
+            # Step 1: Mask alignment scores with positive assignments
+            masked_alignment = alignment_scores * mask  # [B, N, L]
+
+            # Step 2: Get max alignment and max IoU per GT
+            max_alignment_per_gt = masked_alignment.amax(dim=-1, keepdim=True)  # [B, N, 1]
             max_iou_per_gt = (ious * mask).amax(dim=-1, keepdim=True)  # [B, N, 1]
 
-            # Compute normalization factor
-            norm_factor = (alignment_scores * mask * max_iou_per_gt / (max_alignment_per_gt + self.eps)).amax(dim=1)
+            # Step 3: Normalize alignment by max per GT, then scale by max IoU
+            normalized_alignment = masked_alignment / (max_alignment_per_gt + self.eps) * max_iou_per_gt  # [B, N, L]
+
+            # Step 4: Take max across GTs (dim=1) to get per-anchor normalization factor
+            norm_factor = normalized_alignment.amax(dim=1)  # [B, L]
 
             # Assign scores to positive samples
             pos_indices = has_assignment.nonzero(as_tuple=False)
@@ -274,7 +302,7 @@ class BaseTaskAlignedAssigner(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Create empty assignments when no GT objects are present."""
         assigned_labels = torch.full((batch_size, num_anchors), bg_index, dtype=torch.long, device=device)
-        # Use dynamic box dimension - will be reshaped by actual usage
+        # Use dynamic box dimension based on format
         box_dim = 5 if self.box_format == "rotated" else 4
         assigned_boxes = torch.zeros((batch_size, num_anchors, box_dim), device=device)
         assigned_scores = torch.zeros((batch_size, num_anchors, num_classes), device=device)
