@@ -277,7 +277,6 @@ class BaseTaskAlignedAssigner(nn.Module):
             max_iou_per_gt = (ious * mask).amax(dim=-1, keepdim=True)  # [B, N, 1]
 
             # Step 3: Normalize alignment by max per GT, then scale by max IoU
-            # alignment_metrics = alignment_metrics / (max_metrics_per_instance + eps) * max_ious_per_instance
             normalized_alignment = masked_alignment / (max_alignment_per_gt + self.eps) * max_iou_per_gt  # [B, N, L]
 
             # Step 4: Take max across GTs (dim=1) to get per-anchor normalization factor
