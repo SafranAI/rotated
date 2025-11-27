@@ -61,8 +61,8 @@ class ProbIoU:
             / (
                 4
                 * torch.sqrt(
-                    (covariance_a1 * covariance_b1 - covariance_c1.pow(2))
-                    * (covariance_a2 * covariance_b2 - covariance_c2.pow(2))
+                    (covariance_a1 * covariance_b1 - covariance_c1.pow(2)).clamp_(0)
+                    * (covariance_a2 * covariance_b2 - covariance_c2.pow(2)).clamp_(0)
                 )
                 + self.eps
             )

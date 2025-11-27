@@ -331,7 +331,7 @@ class RotatedTaskAlignedAssigner(BaseTaskAlignedAssigner):
         alpha: float = 1.0,
         beta: float = 6.0,
         eps: float = 1e-9,
-        iou_eps: float = 1e-3,
+        iou_eps: float = 1e-7,
     ):
         super().__init__(
             iou_calculator=RotatedIoUCalculator(eps=iou_eps),
