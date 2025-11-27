@@ -1,6 +1,8 @@
 # Modified from PaddleDetection (https://github.com/PaddlePaddle/PaddleDetection)
 # Copyright (c) 2024 PaddlePaddle Authors. Apache 2.0 License.
 
+from collections.abc import Callable
+
 import torch
 import torch.nn as nn
 
@@ -35,7 +37,7 @@ class BaseTaskAlignedAssigner(nn.Module):
 
     def __init__(
         self,
-        iou_calculator,
+        iou_calculator: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         box_format: str = "rotated",
         topk: int = 13,
         alpha: float = 1.0,
