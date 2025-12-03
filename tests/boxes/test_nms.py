@@ -1,14 +1,15 @@
+import pytest
 import torch
 
-from rotated.boxes.nms import (
-    batched_multiclass_rotated_nms,
-    multiclass_rotated_nms,
-    postprocess_detections,
-    rotated_nms,
-)
+from rotated.nn.postprocessor import DetectionPostProcessor
 
 
-def test_rotated_nms_suppresses_overlapping_boxes():
+@pytest.fixture()
+def postprocessor():
+    return DetectionPostProcessor()
+
+
+def test_rotated_nms_suppresses_overlapping_boxes(postprocessor):
     """Test that overlapping boxes are properly suppressed."""
     # Two highly overlapping boxes + one separate box
     boxes = torch.tensor(
@@ -20,7 +21,7 @@ def test_rotated_nms_suppresses_overlapping_boxes():
     )
     scores = torch.tensor([0.9, 0.8, 0.7])  # Box 1 has highest score
 
-    keep = rotated_nms(boxes, scores, iou_threshold=0.3)
+    keep = postprocessor.nms.rotated_nms(boxes, scores, iou_threshold=0.3)
 
     # Should keep exactly 2 boxes (highest scoring overlapping + separate)
     assert len(keep) == 2
@@ -30,7 +31,7 @@ def test_rotated_nms_suppresses_overlapping_boxes():
     assert 1 not in keep  # Overlapping box with lower score should be suppressed
 
 
-def test_rotated_nms_preserves_non_overlapping():
+def test_rotated_nms_preserves_non_overlapping(postprocessor):
     """Test that non-overlapping boxes are all preserved."""
     # Three well-separated boxes
     boxes = torch.tensor(
@@ -42,14 +43,14 @@ def test_rotated_nms_preserves_non_overlapping():
     )
     scores = torch.tensor([0.9, 0.8, 0.7])
 
-    keep = rotated_nms(boxes, scores, iou_threshold=0.5)
+    keep = postprocessor.nms.rotated_nms(boxes, scores, iou_threshold=0.5)
 
     # All boxes should be kept since they don't overlap
     assert len(keep) == 3
     assert torch.equal(keep, torch.tensor([0, 1, 2]))  # Sorted by score
 
 
-def test_multiclass_nms_preserves_different_classes():
+def test_multiclass_nms_preserves_different_classes(postprocessor):
     """Test that overlapping boxes from different classes are preserved."""
     # Two overlapping boxes but different classes
     boxes = torch.tensor(
@@ -61,7 +62,7 @@ def test_multiclass_nms_preserves_different_classes():
     scores = torch.tensor([0.9, 0.8])
     labels = torch.tensor([0, 1])  # Different classes
 
-    keep = multiclass_rotated_nms(boxes, scores, labels, iou_threshold=0.5)
+    keep = postprocessor.nms.multiclass_rotated_nms(boxes, scores, labels, iou_threshold=0.5)
 
     # Both should be kept despite overlap (different classes)
     assert len(keep) == 2
@@ -69,7 +70,7 @@ def test_multiclass_nms_preserves_different_classes():
     assert 1 in keep
 
 
-def test_multiclass_nms_suppresses_same_class():
+def test_multiclass_nms_suppresses_same_class(postprocessor):
     """Test that overlapping boxes from same class are suppressed."""
     # Two overlapping boxes, same class
     boxes = torch.tensor(
@@ -81,14 +82,14 @@ def test_multiclass_nms_suppresses_same_class():
     scores = torch.tensor([0.9, 0.8])
     labels = torch.tensor([0, 0])  # Same class
 
-    keep = multiclass_rotated_nms(boxes, scores, labels, iou_threshold=0.5)
+    keep = postprocessor.nms.multiclass_rotated_nms(boxes, scores, labels, iou_threshold=0.5)
 
     # Only highest scoring box should be kept
     assert len(keep) == 1
     assert keep[0] == 0  # Higher score
 
 
-def test_batched_nms_handles_different_scenarios():
+def test_batched_nms_handles_different_scenarios(postprocessor):
     """Test batched NMS with different scenarios per batch."""
     # Batch 1: 3 non-overlapping boxes
     # Batch 2: 2 overlapping boxes (one will be suppressed) + 1 separate
@@ -117,7 +118,7 @@ def test_batched_nms_handles_different_scenarios():
         ]
     )
 
-    keep = batched_multiclass_rotated_nms(boxes, scores, labels, 0.5, max_output_per_batch=5)
+    keep = postprocessor.nms.batched_multiclass_rotated_nms(boxes, scores, labels, 0.5, max_output_per_batch=5)
 
     # Batch 1: all 3 boxes should be kept (non-overlapping)
     batch1_valid = keep[0][keep[0] >= 0]
@@ -140,9 +141,9 @@ def test_postprocess_score_filtering():
     scores = torch.tensor([0.9, 0.03, 0.7])  # Middle score below threshold
     labels = torch.tensor([0, 1, 2])
 
-    _, result_scores, _ = postprocess_detections(
-        boxes, scores, labels, score_thresh=0.05, nms_thresh=0.5, detections_per_img=5
-    )
+    postprocessor = DetectionPostProcessor(detections_per_img=5)
+
+    _, result_scores, _ = postprocessor.forward(boxes, scores, labels)
 
     # Should keep only 2 boxes (scores 0.9 and 0.7)
     valid_mask = result_scores > 0
@@ -169,9 +170,8 @@ def test_postprocess_topk_candidates():
     scores = torch.tensor([0.9, 0.8, 0.7, 0.6, 0.5])  # All above threshold
     labels = torch.tensor([0, 1, 2, 3, 4])  # All different classes
 
-    _, result_scores, _ = postprocess_detections(
-        boxes, scores, labels, score_thresh=0.1, nms_thresh=0.5, topk_candidates=3, detections_per_img=5
-    )
+    postprocessor = DetectionPostProcessor(topk_candidates=3)
+    _, result_scores, _ = postprocessor.forward(boxes, scores, labels)
 
     # Should keep only top 3 by score (topk_candidates=3)
     valid_mask = result_scores > 0
@@ -196,9 +196,8 @@ def test_postprocess_nms_suppression():
     scores = torch.tensor([0.9, 0.8, 0.6])
     labels = torch.tensor([0, 0, 1])  # First two same class
 
-    _, result_scores, _ = postprocess_detections(
-        boxes, scores, labels, score_thresh=0.1, nms_thresh=0.5, topk_candidates=10, detections_per_img=5
-    )
+    postprocessor = DetectionPostProcessor(detections_per_img=5, topk_candidates=10)
+    _, result_scores, _ = postprocessor.forward(boxes, scores, labels)
 
     # Should suppress overlapping box, keep 2 total
     valid_mask = result_scores > 0
@@ -232,9 +231,8 @@ def test_postprocess_batched_input():
     batch_scores = torch.tensor([[0.9, 0.8], [0.9, 0.02]])  # Second batch has low score
     batch_labels = torch.tensor([[0, 1], [0, 1]])
 
-    result_boxes, result_scores, result_labels = postprocess_detections(
-        batch_boxes, batch_scores, batch_labels, score_thresh=0.05, nms_thresh=0.5, detections_per_img=3
-    )
+    postprocessor = DetectionPostProcessor(detections_per_img=3, topk_candidates=3)
+    result_boxes, result_scores, result_labels = postprocessor.forward(batch_boxes, batch_scores, batch_labels)
 
     # Check output shapes
     assert result_boxes.shape == (2, 3, 5)
@@ -256,9 +254,8 @@ def test_postprocess_empty_input():
     empty_scores = torch.empty(0)
     empty_labels = torch.empty(0, dtype=torch.long)
 
-    result_boxes, result_scores, result_labels = postprocess_detections(
-        empty_boxes, empty_scores, empty_labels, score_thresh=0.05, nms_thresh=0.5, detections_per_img=3
-    )
+    postprocessor = DetectionPostProcessor(detections_per_img=3, topk_candidates=5)
+    result_boxes, result_scores, result_labels = postprocessor.forward(empty_boxes, empty_scores, empty_labels)
 
     # Should return properly shaped tensors with padding
     assert result_boxes.shape == (3, 5)
@@ -270,7 +267,7 @@ def test_postprocess_empty_input():
     assert torch.all(result_labels == -1)
 
 
-def test_torchscript_compatibility():
+def test_torchscript_compatibility(postprocessor):
     """Test TorchScript compilation works correctly."""
     boxes = torch.tensor(
         [
@@ -282,11 +279,11 @@ def test_torchscript_compatibility():
     labels = torch.tensor([0, 1])
 
     # Test scripting
-    scripted_fn = torch.jit.script(postprocess_detections)
-    scripted_result = scripted_fn(boxes, scores, labels, 0.1, 0.5, 3, 10)
+    scripted_fn = torch.jit.script(postprocessor)
+    scripted_result = scripted_fn(boxes, scores, labels)
 
     # Test eager mode
-    eager_result = postprocess_detections(boxes, scores, labels, 0.1, 0.5, 3, 10)
+    eager_result = postprocessor.forward(boxes, scores, labels)
 
     # Results should be identical
     assert torch.allclose(scripted_result[0], eager_result[0])
@@ -294,14 +291,14 @@ def test_torchscript_compatibility():
     assert torch.allclose(scripted_result[2], eager_result[2])
 
 
-def test_postprocess_invalid_input_dimensions():
+def test_postprocess_invalid_input_dimensions(postprocessor):
     """Test postprocess raises error for invalid input dimensions."""
     invalid_boxes = torch.rand(2, 3, 4, 5)  # 4D tensor
     scores = torch.rand(2, 3, 4)
     labels = torch.randint(0, 2, (2, 3, 4))
 
     try:
-        postprocess_detections(invalid_boxes, scores, labels, 0.05, 0.5)
+        postprocessor.forward(invalid_boxes, scores, labels)
     except ValueError as e:
         assert "Expected 2D or 3D input" in str(e)
     else:
