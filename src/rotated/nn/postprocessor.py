@@ -1,11 +1,14 @@
 """Post-processing module for rotated object detection."""
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 
-from rotated.boxes.nms import NMS, IoUMethods
+from rotated.boxes.nms import NMS
+
+if TYPE_CHECKING:
+    from rotated.iou import IoUKwargs, IoUMethodName
 
 
 class DetectionPostProcessor(nn.Module):
@@ -32,8 +35,8 @@ class DetectionPostProcessor(nn.Module):
         nms_thresh: float = 0.5,
         detections_per_img: int = 300,
         topk_candidates: int = 1000,
-        iou_method: IoUMethods = "approx_sdf_l1",
-        iou_kwargs: dict[str, Any] | None = None,
+        iou_method: "IoUMethodName" = "approx_sdf_l1",
+        iou_kwargs: "IoUKwargs" = None,
     ):
         super().__init__()
         self.score_thresh = score_thresh

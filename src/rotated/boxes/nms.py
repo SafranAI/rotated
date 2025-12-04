@@ -1,63 +1,26 @@
 """Module to run the Non Maximum Suppression algorithm."""
 
-import inspect
-from typing import Any, Literal, TypeAlias
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 
-from rotated.iou import ApproxRotatedIoU, ApproxSDFL1, PreciseRotatedIoU, ProbIoU
+from rotated.iou import iou_picker
 
-_IOU_METHODS = {
-    "approx_sdf_l1": ApproxSDFL1,
-    "precise_rotated_iou": PreciseRotatedIoU,
-    "prob_iou": ProbIoU,
-    "approx_rotated_iou": ApproxRotatedIoU,
-}
-
-IoUMethods: TypeAlias = Literal["approx_rotated_iou", "approx_sdf_l1", "precise_rotated_iou", "prob_iou"]
+if TYPE_CHECKING:
+    from rotated.iou import IoUKwargs, IoUMethodName
 
 
 class NMS(nn.Module):
     def __init__(
         self,
         nms_thresh: float = 0.5,
-        iou_method: IoUMethods = "approx_sdf_l1",
-        iou_kwargs: dict[str, Any] | None = None,
+        iou_method: "IoUMethodName" = "approx_sdf_l1",
+        iou_kwargs: "IoUKwargs" = None,
     ):
         super().__init__()
         self.nms_thresh = nms_thresh
-        self._instantiate_iou_method(iou_method=iou_method, iou_kwargs=iou_kwargs or {})
-
-    def _instantiate_iou_method(self, iou_method: IoUMethods, iou_kwargs: dict[str, Any]):
-        """Validate and instantiate the IoU method.
-
-        Args:
-            iou_method: Method name to compute Intersection Over Union
-            iou_kwargs: dictionary with parameters for the IoU method.
-
-        Raises:
-            ValueError: if unknown iou_method or unexpected IoU parameter is provided
-        """
-        if iou_method not in _IOU_METHODS:
-            raise ValueError(f"Unknown IoU method: {iou_method}, use one of {_IOU_METHODS.keys()} instead.")
-
-        iou_cls = _IOU_METHODS[iou_method]
-        valid_params = {}
-        sig = inspect.signature(iou_cls.__init__)
-
-        expected_params = set(sig.parameters.keys()) - {"self"}
-
-        for param_name, param_value in iou_kwargs.items():
-            if param_name in expected_params:
-                valid_params[param_name] = param_value
-            else:
-                raise ValueError(
-                    f"Parameter '{param_name}' is not supported by {iou_cls.__name__}."
-                    f" Supported parameters: {', '.join(expected_params)}"
-                )
-
-        self.iou_calculator = iou_cls(**valid_params)
+        self.iou_calculator = iou_picker(iou_method=iou_method, iou_kwargs=iou_kwargs)
 
     @torch.jit.script_if_tracing
     def forward(

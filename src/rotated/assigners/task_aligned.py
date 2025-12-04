@@ -2,12 +2,16 @@
 # Copyright (c) 2024 PaddlePaddle Authors. Apache 2.0 License.
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 
 from rotated.assigners.calculators import HorizontalIoUCalculator, RotatedIoUCalculator
 from rotated.boxes.utils import check_points_in_horizontal_boxes, check_points_in_rotated_boxes
+
+if TYPE_CHECKING:
+    from rotated.iou import IoUKwargs, IoUMethodName
 
 __all__ = ["RotatedTaskAlignedAssigner", "TaskAlignedAssigner"]
 
@@ -322,7 +326,8 @@ class RotatedTaskAlignedAssigner(BaseTaskAlignedAssigner):
         alpha: Exponent for classification score in alignment computation
         beta: Exponent for IoU score in alignment computation
         eps: Small value to prevent division by zero in assignment
-        iou_eps: Small constant for numerical stability in IoU computation
+        iou_method: Method name to compute Intersection Over Union
+        iou_kwargs: dictionary with parameters for the IoU method
     """
 
     def __init__(
@@ -331,10 +336,11 @@ class RotatedTaskAlignedAssigner(BaseTaskAlignedAssigner):
         alpha: float = 1.0,
         beta: float = 6.0,
         eps: float = 1e-9,
-        iou_eps: float = 1e-7,
+        iou_method: "IoUMethodName" = "prob_iou",
+        iou_kwargs: "IoUKwargs" = None,
     ):
         super().__init__(
-            iou_calculator=RotatedIoUCalculator(eps=iou_eps),
+            iou_calculator=RotatedIoUCalculator(iou_method=iou_method, iou_kwargs=iou_kwargs),
             box_format="rotated",
             topk=topk,
             alpha=alpha,

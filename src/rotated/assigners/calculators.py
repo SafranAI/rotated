@@ -1,17 +1,23 @@
+from typing import TYPE_CHECKING
+
 import torch
+
+if TYPE_CHECKING:
+    from rotated.iou import IoUKwargs, IoUMethodName
 
 
 class RotatedIoUCalculator:
     """IoU calculator for rotated bounding boxes using ProbIoU.
 
     Args:
-        eps: Small constant for numerical stability in ProbIoU computation
+        iou_method: Method name to compute Intersection Over Union
+        iou_kwargs: dictionary with parameters for the IoU method
     """
 
-    def __init__(self, eps: float = 1e-3):
-        from rotated.iou.prob_iou import ProbIoU
+    def __init__(self, iou_method: "IoUMethodName" = "prob_iou", iou_kwargs: "IoUKwargs" = None):
+        from rotated.iou import iou_picker
 
-        self.prob_iou = ProbIoU(eps=eps)
+        self.iou_calculator = iou_picker(iou_method=iou_method, iou_kwargs=iou_kwargs)
 
     def __call__(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
         """Compute pairwise IoU matrix between two sets of rotated boxes.
@@ -39,7 +45,7 @@ class RotatedIoUCalculator:
         boxes2_flat = boxes2_expanded.reshape(-1, 5)
 
         # Compute element-wise IoU: [N*M]
-        iou_flat = self.prob_iou(boxes1_flat, boxes2_flat)
+        iou_flat = self.iou_calculator(boxes1_flat, boxes2_flat)
 
         # Reshape back to matrix: [N, M]
         iou_matrix = iou_flat.view(N, M)
