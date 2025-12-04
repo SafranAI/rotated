@@ -138,7 +138,7 @@ class DetectionPostProcessor(nn.Module):
                 filtered_labels = filtered_labels[top_idxs]
 
             # Step 3: NMS
-            keep_indices = self.nms.multiclass_rotated_nms(filtered_boxes, filtered_scores, filtered_labels, nms_thresh)
+            keep_indices = self.nms.forward(filtered_boxes, filtered_scores, filtered_labels, nms_thresh)
             if keep_indices.numel() == 0:
                 continue
 

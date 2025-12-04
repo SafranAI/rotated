@@ -62,7 +62,7 @@ def test_multiclass_nms_preserves_different_classes(nms):
     scores = torch.tensor([0.9, 0.8])
     labels = torch.tensor([0, 1])  # Different classes
 
-    keep = nms.multiclass_rotated_nms(boxes, scores, labels, iou_threshold=0.5)
+    keep = nms(boxes, scores, labels, iou_threshold=0.5)
 
     # Both should be kept despite overlap (different classes)
     assert len(keep) == 2
@@ -82,7 +82,7 @@ def test_multiclass_nms_suppresses_same_class(nms):
     scores = torch.tensor([0.9, 0.8])
     labels = torch.tensor([0, 0])  # Same class
 
-    keep = nms.multiclass_rotated_nms(boxes, scores, labels, iou_threshold=0.5)
+    keep = nms(boxes, scores, labels, iou_threshold=0.5)
 
     # Only highest scoring box should be kept
     assert len(keep) == 1
@@ -147,3 +147,25 @@ def test_correct_nms_params():
     assert nms.nms_thresh == 0.1
     assert nms.iou_calculator.__class__.__name__ == "PreciseRotatedIoU"
     assert nms.iou_calculator.eps == 1e-3
+
+
+def test_torchscript_compatibility(nms):
+    """Test TorchScript compilation works correctly."""
+    boxes = torch.tensor(
+        [
+            [100.0, 100.0, 50.0, 30.0, 0.0],
+            [200.0, 200.0, 30.0, 20.0, 0.0],
+        ]
+    )
+    scores = torch.tensor([0.9, 0.8])
+    labels = torch.tensor([0, 1])
+
+    # Test scripting
+    scripted_fn = torch.jit.script(nms)
+    scripted_result = scripted_fn(boxes, scores, labels, 0.5)
+
+    # Test eager mode
+    eager_result = nms.forward(boxes, scores, labels, 0.5)
+
+    # Results should be identical
+    assert torch.allclose(scripted_result, eager_result)

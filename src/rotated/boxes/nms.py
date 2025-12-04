@@ -60,7 +60,7 @@ class NMS(nn.Module):
         self.iou_calculator = iou_cls(**valid_params)
 
     @torch.jit.script_if_tracing
-    def multiclass_rotated_nms(
+    def forward(
         self,
         boxes: torch.Tensor,
         scores: torch.Tensor,
@@ -241,7 +241,7 @@ class NMS(nn.Module):
                 valid_scores = batch_scores[valid_mask]
                 valid_labels = batch_labels[valid_mask]
 
-                keep_indices = self.multiclass_rotated_nms(valid_boxes, valid_scores, valid_labels, iou_threshold)
+                keep_indices = self.forward(valid_boxes, valid_scores, valid_labels, iou_threshold)
 
                 if keep_indices.size(0) > 0:
                     valid_original_indices = torch.where(valid_mask)[0]

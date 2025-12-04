@@ -17,7 +17,7 @@ def test_postprocess_score_filtering():
 
     postprocessor = DetectionPostProcessor(detections_per_img=5)
 
-    _, result_scores, _ = postprocessor.forward(boxes, scores, labels)
+    _, result_scores, _ = postprocessor(boxes, scores, labels)
 
     # Should keep only 2 boxes (scores 0.9 and 0.7)
     valid_mask = result_scores > 0
@@ -45,7 +45,7 @@ def test_postprocess_topk_candidates():
     labels = torch.tensor([0, 1, 2, 3, 4])  # All different classes
 
     postprocessor = DetectionPostProcessor(topk_candidates=3)
-    _, result_scores, _ = postprocessor.forward(boxes, scores, labels)
+    _, result_scores, _ = postprocessor(boxes, scores, labels)
 
     # Should keep only top 3 by score (topk_candidates=3)
     valid_mask = result_scores > 0
@@ -71,7 +71,7 @@ def test_postprocess_nms_suppression():
     labels = torch.tensor([0, 0, 1])  # First two same class
 
     postprocessor = DetectionPostProcessor(detections_per_img=5, topk_candidates=10)
-    _, result_scores, _ = postprocessor.forward(boxes, scores, labels)
+    _, result_scores, _ = postprocessor(boxes, scores, labels)
 
     # Should suppress overlapping box, keep 2 total
     valid_mask = result_scores > 0
@@ -106,7 +106,7 @@ def test_postprocess_batched_input():
     batch_labels = torch.tensor([[0, 1], [0, 1]])
 
     postprocessor = DetectionPostProcessor(detections_per_img=3, topk_candidates=3)
-    result_boxes, result_scores, result_labels = postprocessor.forward(batch_boxes, batch_scores, batch_labels)
+    result_boxes, result_scores, result_labels = postprocessor(batch_boxes, batch_scores, batch_labels)
 
     # Check output shapes
     assert result_boxes.shape == (2, 3, 5)
@@ -129,7 +129,7 @@ def test_postprocess_empty_input():
     empty_labels = torch.empty(0, dtype=torch.long)
 
     postprocessor = DetectionPostProcessor(detections_per_img=3, topk_candidates=5)
-    result_boxes, result_scores, result_labels = postprocessor.forward(empty_boxes, empty_scores, empty_labels)
+    result_boxes, result_scores, result_labels = postprocessor(empty_boxes, empty_scores, empty_labels)
 
     # Should return properly shaped tensors with padding
     assert result_boxes.shape == (3, 5)
@@ -158,7 +158,7 @@ def test_torchscript_compatibility():
     scripted_result = scripted_fn(boxes, scores, labels)
 
     # Test eager mode
-    eager_result = postprocessor.forward(boxes, scores, labels)
+    eager_result = postprocessor(boxes, scores, labels)
 
     # Results should be identical
     assert torch.allclose(scripted_result[0], eager_result[0])
@@ -174,7 +174,7 @@ def test_postprocess_invalid_input_dimensions():
     postprocessor = DetectionPostProcessor()
 
     try:
-        postprocessor.forward(invalid_boxes, scores, labels)
+        postprocessor(invalid_boxes, scores, labels)
     except ValueError as e:
         assert "Expected 2D or 3D input" in str(e)
     else:
