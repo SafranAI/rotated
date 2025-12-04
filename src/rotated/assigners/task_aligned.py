@@ -327,7 +327,7 @@ class RotatedTaskAlignedAssigner(BaseTaskAlignedAssigner):
         beta: Exponent for IoU score in alignment computation
         eps: Small value to prevent division by zero in assignment
         iou_method: Method name to compute Intersection Over Union
-        iou_kwargs: dictionary with parameters for the IoU method
+        iou_kwargs: Dictionary with parameters for the IoU method
     """
 
     def __init__(

@@ -11,7 +11,7 @@ class RotatedIoUCalculator:
 
     Args:
         iou_method: Method name to compute Intersection Over Union
-        iou_kwargs: dictionary with parameters for the IoU method
+        iou_kwargs: Dictionary with parameters for the IoU method
     """
 
     def __init__(self, iou_method: "IoUMethodName" = "prob_iou", iou_kwargs: "IoUKwargs" = None):
