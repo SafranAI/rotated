@@ -16,7 +16,7 @@ class ProbIoU:
         Paper link: https://arxiv.org/pdf/2106.06072
     """
 
-    def __init__(self, eps: float = 1e-3):
+    def __init__(self, eps: float = 1e-7):
         self.eps = eps
 
     def __call__(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:

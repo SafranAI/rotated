@@ -12,6 +12,14 @@ if TYPE_CHECKING:
 
 
 class NMS(nn.Module):
+    """Non-Maximum Suppression module for rotated object detection.
+
+    Args:
+        nms_thresh: threshold below which detections are removed
+        iou_method: Method name to compute Intersection Over Union
+        iou_kwargs: Dictionary with parameters for the IoU method.
+    """
+
     def __init__(
         self,
         nms_thresh: float = 0.5,

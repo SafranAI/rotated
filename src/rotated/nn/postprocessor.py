@@ -26,7 +26,7 @@ class DetectionPostProcessor(nn.Module):
         detections_per_img: Maximum number of detections to keep per image
         topk_candidates: Number of top candidates to consider before NMS
         iou_method: Method name to compute Intersection Over Union
-        iou_kwargs: dictionary with parameters for the IoU method.
+        iou_kwargs: Dictionary with parameters for the IoU method.
     """
 
     def __init__(
