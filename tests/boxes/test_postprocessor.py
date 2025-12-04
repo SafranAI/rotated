@@ -21,7 +21,7 @@ def test_rotated_nms_suppresses_overlapping_boxes(postprocessor):
     )
     scores = torch.tensor([0.9, 0.8, 0.7])  # Box 1 has highest score
 
-    keep = postprocessor.nms.rotated_nms(boxes, scores, iou_threshold=0.3)
+    keep = postprocessor.rotated_nms(boxes, scores, iou_threshold=0.3)
 
     # Should keep exactly 2 boxes (highest scoring overlapping + separate)
     assert len(keep) == 2
@@ -43,7 +43,7 @@ def test_rotated_nms_preserves_non_overlapping(postprocessor):
     )
     scores = torch.tensor([0.9, 0.8, 0.7])
 
-    keep = postprocessor.nms.rotated_nms(boxes, scores, iou_threshold=0.5)
+    keep = postprocessor.rotated_nms(boxes, scores, iou_threshold=0.5)
 
     # All boxes should be kept since they don't overlap
     assert len(keep) == 3
@@ -62,7 +62,7 @@ def test_multiclass_nms_preserves_different_classes(postprocessor):
     scores = torch.tensor([0.9, 0.8])
     labels = torch.tensor([0, 1])  # Different classes
 
-    keep = postprocessor.nms.multiclass_rotated_nms(boxes, scores, labels, iou_threshold=0.5)
+    keep = postprocessor.multiclass_rotated_nms(boxes, scores, labels, iou_threshold=0.5)
 
     # Both should be kept despite overlap (different classes)
     assert len(keep) == 2
@@ -82,7 +82,7 @@ def test_multiclass_nms_suppresses_same_class(postprocessor):
     scores = torch.tensor([0.9, 0.8])
     labels = torch.tensor([0, 0])  # Same class
 
-    keep = postprocessor.nms.multiclass_rotated_nms(boxes, scores, labels, iou_threshold=0.5)
+    keep = postprocessor.multiclass_rotated_nms(boxes, scores, labels, iou_threshold=0.5)
 
     # Only highest scoring box should be kept
     assert len(keep) == 1
@@ -118,7 +118,7 @@ def test_batched_nms_handles_different_scenarios(postprocessor):
         ]
     )
 
-    keep = postprocessor.nms.batched_multiclass_rotated_nms(boxes, scores, labels, 0.5, max_output_per_batch=5)
+    keep = postprocessor.batched_multiclass_rotated_nms(boxes, scores, labels, 0.5, max_output_per_batch=5)
 
     # Batch 1: all 3 boxes should be kept (non-overlapping)
     batch1_valid = keep[0][keep[0] >= 0]
