@@ -1,6 +1,7 @@
 """Post-processing module for rotated object detection."""
 
-from typing import Literal, TypeAlias
+import inspect
+from typing import Any, Literal, TypeAlias
 
 import torch
 import torch.nn as nn
@@ -28,9 +29,7 @@ class DetectionPostProcessor(nn.Module):
         detections_per_img: Maximum number of detections to keep per image
         topk_candidates: Number of top candidates to consider before NMS
         iou_method: Method name to compute Intersection Over Union
-
-    Raises:
-        ValueError: if unknown iou_method is provided
+        iou_kwargs: dictionary with parameters for the IoU method.
     """
 
     def __init__(
@@ -40,15 +39,44 @@ class DetectionPostProcessor(nn.Module):
         detections_per_img: int = 300,
         topk_candidates: int = 1000,
         iou_method: IoUMethods = "approx_sdf_l1",
+        iou_kwargs: dict[str, Any] | None = None,
     ):
         super().__init__()
         self.score_thresh = score_thresh
         self.nms_thresh = nms_thresh
         self.detections_per_img = detections_per_img
         self.topk_candidates = topk_candidates
+        self._instantiate_iou_method(iou_method=iou_method, iou_kwargs=iou_kwargs or {})
+
+    def _instantiate_iou_method(self, iou_method: IoUMethods, iou_kwargs: dict[str, Any]):
+        """Validate and instantiate the IoU method.
+
+        Args:
+            iou_method: Method name to compute Intersection Over Union
+            iou_kwargs: dictionary with parameters for the IoU method.
+
+        Raises:
+            ValueError: if unknown iou_method or unexpected IoU parameter is provided
+        """
         if iou_method not in _IOU_METHODS:
             raise ValueError(f"Unknown IoU method: {iou_method}, use one of {_IOU_METHODS.keys()} instead.")
-        self.iou_calculator = _IOU_METHODS[iou_method]()
+
+        iou_cls = _IOU_METHODS[iou_method]
+        valid_params = {}
+        sig = inspect.signature(iou_cls.__init__)
+
+        expected_params = set(sig.parameters.keys()) - {"self"}
+
+        for param_name, param_value in iou_kwargs.items():
+            if param_name in expected_params:
+                valid_params[param_name] = param_value
+            else:
+                raise ValueError(
+                    f"Parameter '{param_name}' is not supported by {iou_cls.__name__}."
+                    f" Supported parameters: {', '.join(expected_params)}"
+                )
+
+        self.iou_calculator = iou_cls(**valid_params)
 
     @torch.jit.script_if_tracing
     def forward(
