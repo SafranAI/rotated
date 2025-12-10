@@ -271,6 +271,7 @@ class CSPResNet(Backbone):
         depth_mult: float = 1.0,
         use_alpha: bool = False,
         use_checkpoint: bool = False,
+        in_chans: int = 3,
     ):
         super().__init__(return_levels=return_levels)
 
@@ -297,7 +298,7 @@ class CSPResNet(Backbone):
         layers_list = [max(round(layer * depth_mult), 1) for layer in layers]
 
         # Build stem
-        self.stem = self._build_stem(channels_list[0], act, use_large_stem)
+        self.stem = self._build_stem(channels_list[0], act, use_large_stem, in_chans)
 
         # Build stages
         num_stages = len(channels_list) - 1
@@ -319,17 +320,17 @@ class CSPResNet(Backbone):
         self._out_channels = channels_list[1:]
         self._out_strides = [4 * 2**stage_idx for stage_idx in range(num_stages)]
 
-    def _build_stem(self, base_channels: int, act: str, use_large_stem: bool) -> nn.Sequential:
+    def _build_stem(self, base_channels: int, act: str, use_large_stem: bool, in_chans: int) -> nn.Sequential:
         """Build the stem (initial feature extraction) layers."""
         if use_large_stem:
             return nn.Sequential(
-                ConvBNLayer(3, base_channels // 2, 3, stride=2, padding=1, act=act),
+                ConvBNLayer(in_chans, base_channels // 2, 3, stride=2, padding=1, act=act),
                 ConvBNLayer(base_channels // 2, base_channels // 2, 3, stride=1, padding=1, act=act),
                 ConvBNLayer(base_channels // 2, base_channels, 3, stride=1, padding=1, act=act),
             )
         else:
             return nn.Sequential(
-                ConvBNLayer(3, base_channels // 2, 3, stride=2, padding=1, act=act),
+                ConvBNLayer(in_chans, base_channels // 2, 3, stride=2, padding=1, act=act),
                 ConvBNLayer(base_channels // 2, base_channels, 3, stride=1, padding=1, act=act),
             )
 
