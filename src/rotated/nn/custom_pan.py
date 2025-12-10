@@ -14,7 +14,12 @@ class BasicBlock(nn.Module):
     """Basic residual block with optional shortcut connection and alpha parameter."""
 
     def __init__(
-        self, in_channels: int, out_channels: int, act: ActivationType = "swish", shortcut: bool = True, use_alpha: bool = False
+        self,
+        in_channels: int,
+        out_channels: int,
+        act: ActivationType = "swish",
+        shortcut: bool = True,
+        use_alpha: bool = False,
     ):
         super().__init__()
         self.conv1 = ConvBNLayer(in_channels, out_channels, 3, padding=1, act=act)
@@ -40,7 +45,12 @@ class SPP(nn.Module):
     """Spatial Pyramid Pooling module for multi-scale feature extraction."""
 
     def __init__(
-        self, in_channels: int, out_channels: int, kernel_size: int, pool_size: Sequence[int], act: ActivationType = "swish"
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        pool_size: Sequence[int],
+        act: ActivationType = "swish",
     ):
         super().__init__()
         self.pool = nn.ModuleList([nn.MaxPool2d(kernel_size=size, stride=1, padding=size // 2) for size in pool_size])
