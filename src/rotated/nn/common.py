@@ -1,10 +1,51 @@
+from typing import Literal, TypeAlias
+
 import torch.nn as nn
+
+ActivationType: TypeAlias = Literal["swish", "leaky", "relu", "gelu", "hardsigmoid", "sigmoid", None]
+"""Type alias for supported activation functions."""
+
+
+def get_activation(act: ActivationType = None, inplace: bool = False) -> nn.Module:
+    """Get activation function based on string identifier.
+
+    Args:
+        act: String identifier for activation function. Options are:
+            - 'swish': SiLU activation
+            - 'leaky': LeakyReLU with negative slope 0.1
+            - 'relu': ReLU activation
+            - 'gelu': GELU activation
+            - 'hardsigmoid': Hardsigmoid activation
+            - 'sigmoid': Sigmoid activation
+            - None: Identity (no activation)
+        inplace: Whether to use in-place operations where supported
+
+    Returns:
+        nn.Module: Activation function module
+
+    Raises:
+        NotImplementedError: If activation is not supported
+    """
+    activation_map = {
+        "swish": nn.SiLU(inplace=inplace),
+        "leaky": nn.LeakyReLU(0.1, inplace=inplace),
+        "relu": nn.ReLU(inplace=inplace),
+        "gelu": nn.GELU(),  # GELU doesn't support inplace
+        "hardsigmoid": nn.Hardsigmoid(inplace=inplace),
+        "sigmoid": nn.Sigmoid(),  # Sigmoid doesn't support inplace
+        None: nn.Identity(),
+    }
+    if act not in activation_map:
+        raise NotImplementedError(f"Activation {act} not implemented")
+    return activation_map[act]
 
 
 class ConvBNLayer(nn.Module):
-    """Basic convolutional layer with batch normalization and activation.
+    """Combines Conv2d, BatchNorm2d, and activation function into a single module.
 
-    Combines Conv2d, BatchNorm2d, and activation function into a single module.
+    Note:
+    BatchNorm2d layer uses eps=1e-3 and momentum=0.03, which are common values used in YOLO family models
+    for better numerical stability.
     """
 
     def __init__(
@@ -15,7 +56,7 @@ class ConvBNLayer(nn.Module):
         stride: int = 1,
         groups: int = 1,
         padding: int = 0,
-        act: str | None = None,
+        act: ActivationType = None,
     ):
         super().__init__()
 
@@ -36,26 +77,12 @@ class ConvBNLayer(nn.Module):
             bias=False,
         )
 
-        self.bn = nn.BatchNorm2d(out_channels)
-        self.act = self._get_activation(act)
-
-    def _get_activation(self, act: str | None) -> nn.Module:
-        """Get activation function based on string identifier."""
-        activation_map = {
-            "swish": nn.SiLU(),
-            "leaky": nn.LeakyReLU(0.1),
-            "relu": nn.ReLU(),
-            "gelu": nn.GELU(),
-            "hardsigmoid": nn.Hardsigmoid(),
-            None: nn.Identity(),
-        }
-        if act not in activation_map:
-            raise NotImplementedError(f"Activation {act} not implemented")
-        return activation_map[act]
+        # BatchNorm2d with eps=1e-3 and momentum=0.03, common values used in YOLO family models
+        self.bn = nn.BatchNorm2d(out_channels, eps=1e-3, momentum=0.03)
+        self.act = get_activation(act, inplace=True)  # Store activation module with in-place operations
 
     def forward(self, input_tensor):
         """Forward pass through conv-bn-activation sequence."""
         output_tensor = self.conv(input_tensor)
         output_tensor = self.bn(output_tensor)
-        output_tensor = self.act(output_tensor)
-        return output_tensor
+        return self.act(output_tensor)

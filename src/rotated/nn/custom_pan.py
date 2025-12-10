@@ -7,14 +7,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from rotated.nn.common import ConvBNLayer
+from rotated.nn.common import ActivationType, ConvBNLayer
 
 
 class BasicBlock(nn.Module):
     """Basic residual block with optional shortcut connection and alpha parameter."""
 
     def __init__(
-        self, in_channels: int, out_channels: int, act: str = "swish", shortcut: bool = True, use_alpha: bool = False
+        self, in_channels: int, out_channels: int, act: ActivationType = "swish", shortcut: bool = True, use_alpha: bool = False
     ):
         super().__init__()
         self.conv1 = ConvBNLayer(in_channels, out_channels, 3, padding=1, act=act)
@@ -40,7 +40,7 @@ class SPP(nn.Module):
     """Spatial Pyramid Pooling module for multi-scale feature extraction."""
 
     def __init__(
-        self, in_channels: int, out_channels: int, kernel_size: int, pool_size: Sequence[int], act: str = "swish"
+        self, in_channels: int, out_channels: int, kernel_size: int, pool_size: Sequence[int], act: ActivationType = "swish"
     ):
         super().__init__()
         self.pool = nn.ModuleList([nn.MaxPool2d(kernel_size=size, stride=1, padding=size // 2) for size in pool_size])
@@ -63,7 +63,7 @@ class CSPStage(nn.Module):
         in_channels: int,
         out_channels: int,
         num_blocks: int,
-        act: str = "swish",
+        act: ActivationType = "swish",
         spp: bool = False,
         use_alpha: bool = False,
     ):
@@ -112,7 +112,7 @@ class CustomCSPPAN(nn.Module):
         self,
         in_channels: Sequence[int] = (256, 512, 1024),  # P3, P4, P5 (shallow → deep)
         out_channels: Sequence[int] = (192, 384, 768),  # P3', P4', P5' (shallow → deep)
-        act: str = "swish",
+        act: ActivationType = "swish",
         stage_num: int = 1,
         block_num: int = 3,
         spp: bool = True,

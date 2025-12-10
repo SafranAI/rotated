@@ -10,14 +10,14 @@ import torch.nn.functional as F
 
 from rotated.boxes.decode import decode_ppyoloer_boxes
 from rotated.losses.ppyoloer_criterion import LossComponents
-from rotated.nn.common import ConvBNLayer
+from rotated.nn.common import ActivationType, ConvBNLayer
 from rotated.utils.export import compile_compatible_lru_cache
 
 
 class ESEAttn(nn.Module):
     """Efficient Squeeze-and-Excitation Attention."""
 
-    def __init__(self, feat_channels: int, act: str = "swish"):
+    def __init__(self, feat_channels: int, act: ActivationType = "swish"):
         super().__init__()
 
         if feat_channels <= 0:
@@ -64,7 +64,7 @@ class PPYOLOERHead(nn.Module):
         self,
         in_channels: Sequence[int] = (192, 384, 768),  # P3', P4', P5' (shallow → deep)
         num_classes: int = 15,
-        act: str = "swish",
+        act: ActivationType = "swish",
         fpn_strides: Sequence[int] = (8, 16, 32),  # P3, P4, P5 (shallow → deep)
         grid_cell_offset: float = 0.5,
         angle_max: int = 90,

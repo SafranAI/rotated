@@ -8,13 +8,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from rotated.backbones.base import Backbone
-from rotated.nn.common import ConvBNLayer
+from rotated.nn.common import ActivationType, ConvBNLayer, get_activation
 
 
 class RepVggBlock(nn.Module):
     """RepVGG block with structural re-parameterization capability."""
 
-    def __init__(self, in_channels: int, out_channels: int, act: str = "relu", alpha: bool = False):
+    def __init__(self, in_channels: int, out_channels: int, act: ActivationType = "relu", alpha: bool = False):
         super().__init__()
 
         if in_channels <= 0:
@@ -27,34 +27,20 @@ class RepVggBlock(nn.Module):
 
         self.conv1 = ConvBNLayer(in_channels, out_channels, 3, stride=1, padding=1, act=None)
         self.conv2 = ConvBNLayer(in_channels, out_channels, 1, stride=1, padding=0, act=None)
-        self.act = self._get_activation(act)
+        self.act = get_activation(act, inplace=True)
 
-        if alpha:
-            self.alpha = nn.Parameter(torch.ones(1))
-        else:
-            self.alpha = None
-
-    def _get_activation(self, act: str) -> nn.Module:
-        """Get activation function based on string identifier."""
-        activation_map = {
-            "swish": nn.SiLU(),
-            "leaky": nn.LeakyReLU(0.1),
-            "relu": nn.ReLU(),
-            "gelu": nn.GELU(),
-        }
-        return activation_map.get(act, nn.ReLU())
+        self.alpha = nn.Parameter(torch.ones(1)) if alpha else None
 
     def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
         """Forward pass with optional alpha weighting."""
         if hasattr(self, "conv"):
             # Deployed mode: single fused conv
-            output_tensor = self.conv(input_tensor)
-        else:
-            # Training mode: separate convs
-            alpha = self.alpha if self.alpha is not None else 1.0
-            output_tensor = self.conv1(input_tensor) + alpha * self.conv2(input_tensor)
-        output_tensor = self.act(output_tensor)
-        return output_tensor
+            return self.act(self.conv(input_tensor))
+
+        # Training mode: separate convs
+        alpha = self.alpha if self.alpha is not None else 1.0
+        output_tensor = self.conv1(input_tensor) + alpha * self.conv2(input_tensor)
+        return self.act(output_tensor)
 
     def export(self) -> None:
         """Convert to deployment mode by fusing convolutions."""
@@ -119,7 +105,12 @@ class BasicBlock(nn.Module):
     """Basic residual block for CSPResNet."""
 
     def __init__(
-        self, in_channels: int, out_channels: int, act: str = "relu", shortcut: bool = True, use_alpha: bool = False
+        self,
+        in_channels: int,
+        out_channels: int,
+        act: ActivationType = "relu",
+        shortcut: bool = True,
+        use_alpha: bool = False,
     ):
         super().__init__()
 
@@ -149,24 +140,14 @@ class BasicBlock(nn.Module):
 class EffectiveSELayer(nn.Module):
     """Effective Squeeze-Excitation layer."""
 
-    def __init__(self, channels: int, act: str = "hardsigmoid"):
+    def __init__(self, channels: int, act: ActivationType = "hardsigmoid"):
         super().__init__()
 
         if channels <= 0:
             raise ValueError(f"Channels must be positive, got {channels}")
 
         self.fc = nn.Conv2d(channels, channels, kernel_size=1, padding=0)
-        self.act = self._get_activation(act)
-
-    def _get_activation(self, act: str) -> nn.Module:
-        """Get activation function based on string identifier."""
-        activation_map = {
-            "hardsigmoid": nn.Hardsigmoid(),
-            "sigmoid": nn.Sigmoid(),
-            "swish": nn.SiLU(),
-            "relu": nn.ReLU(),
-        }
-        return activation_map.get(act, nn.Hardsigmoid())
+        self.act = get_activation(act, inplace=True)  # Store activation module with in-place operations
 
     def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
         """Apply squeeze-excitation attention mechanism."""
@@ -184,7 +165,7 @@ class CSPResStage(nn.Module):
         out_channels: int,
         num_blocks: int,
         stride: int,
-        act: str = "relu",
+        act: ActivationType = "relu",
         attn: str | None = "eca",
         use_alpha: bool = False,
     ):
@@ -202,10 +183,9 @@ class CSPResStage(nn.Module):
         mid_channels = (in_channels + out_channels) // 2
 
         # Optional downsampling conv
-        if stride == 2:
-            self.conv_down = ConvBNLayer(in_channels, mid_channels, 3, stride=2, padding=1, act=act)
-        else:
-            self.conv_down = None
+        self.conv_down = (
+            ConvBNLayer(in_channels, mid_channels, 3, stride=2, padding=1, act=act) if stride == 2 else None
+        )
 
         # CSP split convolutions
         self.conv1 = ConvBNLayer(mid_channels, mid_channels // 2, 1, act=act)
@@ -215,15 +195,12 @@ class CSPResStage(nn.Module):
         self.blocks = nn.Sequential(
             *[
                 BasicBlock(mid_channels // 2, mid_channels // 2, act=act, shortcut=True, use_alpha=use_alpha)
-                for block_idx in range(num_blocks)
+                for _ in range(num_blocks)
             ]
         )
 
         # Optional attention mechanism
-        if attn:
-            self.attn = EffectiveSELayer(mid_channels, act="hardsigmoid")
-        else:
-            self.attn = None
+        self.attn = EffectiveSELayer(mid_channels, act="hardsigmoid") if attn is not None else None
 
         # Final output conv
         self.conv3 = ConvBNLayer(mid_channels, out_channels, 1, act=act)
@@ -264,7 +241,7 @@ class CSPResNet(Backbone):
         self,
         layers: Sequence[int] = (3, 6, 6, 3),
         channels: Sequence[int] = (64, 128, 256, 512, 1024),
-        act: str = "swish",
+        act: ActivationType = "swish",
         return_levels: Sequence[int] = (1, 2, 3),  # Return stride [8, 16, 32] features
         use_large_stem: bool = False,
         width_mult: float = 1.0,
@@ -328,11 +305,11 @@ class CSPResNet(Backbone):
                 ConvBNLayer(base_channels // 2, base_channels // 2, 3, stride=1, padding=1, act=act),
                 ConvBNLayer(base_channels // 2, base_channels, 3, stride=1, padding=1, act=act),
             )
-        else:
-            return nn.Sequential(
-                ConvBNLayer(in_chans, base_channels // 2, 3, stride=2, padding=1, act=act),
-                ConvBNLayer(base_channels // 2, base_channels, 3, stride=1, padding=1, act=act),
-            )
+
+        return nn.Sequential(
+            ConvBNLayer(in_chans, base_channels // 2, 3, stride=2, padding=1, act=act),
+            ConvBNLayer(base_channels // 2, base_channels, 3, stride=1, padding=1, act=act),
+        )
 
     def forward(self, input_tensor: torch.Tensor) -> list[torch.Tensor]:
         """Extract features at specified levels."""
