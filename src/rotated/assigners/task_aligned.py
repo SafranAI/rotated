@@ -141,6 +141,9 @@ class BaseTaskAlignedAssigner(nn.Module):
         # Stack all batch IoU matrices: [B, N, L]
         iou_matrix = torch.stack(iou_matrices, dim=0)
 
+        # Set IoU values > 1 + eps to 0 (treat as numerical errors), don't just clamp
+        iou_matrix = torch.where(iou_matrix > 1.0 + self.eps, torch.zeros_like(iou_matrix), iou_matrix)
+
         # Guard: handle any invalid values from IoU computation
         iou_matrix = torch.nan_to_num(iou_matrix, nan=0.0, posinf=0.0, neginf=0.0)
 
