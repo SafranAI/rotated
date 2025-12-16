@@ -7,7 +7,7 @@ from rotated.iou.prob_iou import ProbIoU
 class ProbIoULoss(nn.Module):
     """ProbIoU Loss for training object detectors."""
 
-    def __init__(self, eps: float = 1e-3, mode: str = "l1", reduction: str = "mean"):
+    def __init__(self, eps: float = 1e-7, mode: str = "l1", reduction: str = "mean"):
         super().__init__()
         self.probiou = ProbIoU(eps=eps)
         self.mode = mode

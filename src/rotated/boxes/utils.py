@@ -196,3 +196,29 @@ def check_points_in_horizontal_boxes(points: torch.Tensor, boxes: torch.Tensor) 
     inside_y = (py_exp >= y1) & (py_exp <= y2)
 
     return inside_x & inside_y
+
+
+def check_is_valid_box(boxes: torch.Tensor, min_box_size: float = 1e-6) -> torch.Tensor:
+    """Check if boxes have valid dimensions.
+
+    Args:
+        boxes: Boxes tensor [N, D] where D >= 4 - (..., w, h, ...)
+               For rotated: (cx, cy, w, h, angle)
+               For horizontal: (cx, cy, w, h)
+        min_box_size: Minimum valid box dimension
+
+    Returns:
+        Boolean mask [N] indicating valid boxes
+    """
+    # Width is always at index 2, height at index 3
+    w = boxes[:, 2]
+    h = boxes[:, 3]
+
+    # Box is valid if:
+    # 1. Width and height are above minimum threshold
+    # 2. No NaN values in any dimension
+    # 3. No inf values in any dimension
+    valid_size = (w >= min_box_size) & (h >= min_box_size)
+    valid_values = ~torch.isnan(boxes).any(dim=-1) & ~torch.isinf(boxes).any(dim=-1)
+
+    return valid_size & valid_values

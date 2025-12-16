@@ -2,6 +2,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from rotated.boxes.utils import check_is_valid_box
+
 if TYPE_CHECKING:
     from rotated.iou import IoUKwargs, IoUMethodName
 
@@ -12,12 +14,19 @@ class RotatedIoUCalculator:
     Args:
         iou_method: Method name to compute Intersection Over Union
         iou_kwargs: Dictionary with parameters for the IoU method
+        min_box_size: Minimum valid box dimension (width or height). Boxes smaller than this are invalid.
     """
 
-    def __init__(self, iou_method: "IoUMethodName" = "prob_iou", iou_kwargs: "IoUKwargs" = None):
+    def __init__(
+        self,
+        iou_method: "IoUMethodName" = "prob_iou",
+        iou_kwargs: "IoUKwargs" = None,
+        min_box_size: float = 1e-2,
+    ):
         from rotated.iou import iou_picker
 
         self.iou_calculator = iou_picker(iou_method=iou_method, iou_kwargs=iou_kwargs)
+        self.min_box_size = min_box_size
 
     def __call__(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
         """Compute pairwise IoU matrix between two sets of rotated boxes.
@@ -34,23 +43,31 @@ class RotatedIoUCalculator:
         if N == 0 or M == 0:
             return torch.zeros(N, M, device=boxes1.device, dtype=boxes1.dtype)
 
+        # Identify valid boxes (non-degenerate)
+        valid_boxes1 = check_is_valid_box(boxes1, self.min_box_size)  # [N]
+        valid_boxes2 = check_is_valid_box(boxes2, self.min_box_size)  # [M]
+
         # Expand for pairwise computation
-        # boxes1: [N, 1, 5] -> [N, M, 5]
-        boxes1_expanded = boxes1.unsqueeze(1).expand(-1, M, -1)
-        # boxes2: [1, M, 5] -> [N, M, 5]
-        boxes2_expanded = boxes2.unsqueeze(0).expand(N, -1, -1)
+        boxes1_expanded = boxes1.unsqueeze(1).expand(-1, M, -1)  # [N, M, 5]
+        boxes2_expanded = boxes2.unsqueeze(0).expand(N, -1, -1)  # [N, M, 5]
 
-        # Flatten for element-wise computation: [N*M, 5]
-        boxes1_flat = boxes1_expanded.reshape(-1, 5)
-        boxes2_flat = boxes2_expanded.reshape(-1, 5)
+        # Create validity mask for pairs
+        valid_pairs = valid_boxes1.unsqueeze(1) & valid_boxes2.unsqueeze(0)  # [N, M]
 
-        # Compute element-wise IoU: [N*M]
-        iou_flat = self.iou_calculator(boxes1_flat, boxes2_flat)
+        # Flatten for element-wise computation
+        boxes1_flat = boxes1_expanded.reshape(-1, 5)  # [N*M, 5]
+        boxes2_flat = boxes2_expanded.reshape(-1, 5)  # [N*M, 5]
 
-        # Reshape back to matrix: [N, M]
-        iou_matrix = iou_flat.view(N, M)
+        # Compute element-wise IoU (will be 0 for invalid boxes anyway)
+        iou_flat = self.iou_calculator(boxes1_flat, boxes2_flat)  # [N*M]
 
-        return iou_matrix
+        # Reshape back to matrix
+        iou_matrix = iou_flat.view(N, M)  # [N, M]
+
+        # Zero out IoU for invalid box pairs
+        iou_matrix = torch.where(valid_pairs, iou_matrix, torch.zeros_like(iou_matrix))
+
+        return iou_matrix.clamp_(0.0, 1.0)
 
 
 class HorizontalIoUCalculator:
@@ -58,10 +75,12 @@ class HorizontalIoUCalculator:
 
     Args:
         eps: Small constant to prevent division by zero
+        min_box_size: Minimum valid box dimension (width or height). Boxes smaller than this are invalid.
     """
 
-    def __init__(self, eps: float = 1e-7):
+    def __init__(self, eps: float = 1e-7, min_box_size: float = 1e-2):
         self.eps = eps
+        self.min_box_size = min_box_size
 
     def __call__(self, boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
         """Compute pairwise IoU matrix between two sets of horizontal boxes.
@@ -78,6 +97,11 @@ class HorizontalIoUCalculator:
         if N == 0 or M == 0:
             return torch.zeros(N, M, device=boxes1.device, dtype=boxes1.dtype)
 
+        # Check validity
+        valid_boxes1 = check_is_valid_box(boxes1, self.min_box_size)
+        valid_boxes2 = check_is_valid_box(boxes2, self.min_box_size)
+        valid_pairs = valid_boxes1.unsqueeze(1) & valid_boxes2.unsqueeze(0)
+
         boxes1_xyxy = self._cxcywh_to_xyxy(boxes1)
         boxes2_xyxy = self._cxcywh_to_xyxy(boxes2)
 
@@ -87,19 +111,21 @@ class HorizontalIoUCalculator:
         x2_inter = torch.min(boxes1_xyxy[:, None, 2], boxes2_xyxy[None, :, 2])
         y2_inter = torch.min(boxes1_xyxy[:, None, 3], boxes2_xyxy[None, :, 3])
 
-        # Intersection area
         inter_area = torch.clamp(x2_inter - x1_inter, min=0) * torch.clamp(y2_inter - y1_inter, min=0)
 
         # Box areas
         area1 = (boxes1_xyxy[:, 2] - boxes1_xyxy[:, 0]) * (boxes1_xyxy[:, 3] - boxes1_xyxy[:, 1])
         area2 = (boxes2_xyxy[:, 2] - boxes2_xyxy[:, 0]) * (boxes2_xyxy[:, 3] - boxes2_xyxy[:, 1])
 
-        # Union area
         union_area = area1[:, None] + area2[None, :] - inter_area
 
         # IoU
         iou = inter_area / (union_area + self.eps)
-        return torch.clamp(iou, 0.0, 1.0)
+
+        # Zero out invalid pairs
+        iou = torch.where(valid_pairs, iou, torch.zeros_like(iou))
+
+        return torch.clamp_(iou, 0.0, 1.0)
 
     def _cxcywh_to_xyxy(self, boxes: torch.Tensor) -> torch.Tensor:
         """Convert center format to corner format."""
