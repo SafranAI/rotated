@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from src.rotated.boxes.utils import check_is_valid_box
+from rotated.boxes.utils import check_is_valid_box
 
 
 @pytest.mark.parametrize(
