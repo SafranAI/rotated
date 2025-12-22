@@ -164,25 +164,42 @@ class NMS(nn.Module):
         return self._rotated_nms_sequential(boxes, scores, iou_threshold)
 
     @torch.jit.script_if_tracing
+    def _compute_iou_matrix(self, boxes: torch.Tensor, scores: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, int]:
+        """Compute IoU matrix for all box pairs.
+
+        Shared computation for vectorized and fast NMS modes.
+
+        Args:
+            boxes: Rotated boxes [N, 5]
+            scores: Confidence scores [N]
+
+        Returns:
+            Tuple of (iou_matrix [N, N], order [N], N)
+        """
+        N = boxes.size(0)
+        order = torch.argsort(scores, descending=True)
+        boxes_sorted = boxes[order]
+
+        # Prepare paired inputs for IoU computation: expand to [N*N, 5]
+        boxes_i = boxes_sorted.unsqueeze(1).expand(N, N, 5).reshape(-1, 5)
+        boxes_j = boxes_sorted.unsqueeze(0).expand(N, N, 5).reshape(-1, 5)
+
+        # Compute IoU for all pairs
+        ious_flat = self.iou_calculator(boxes_i, boxes_j)
+        iou_matrix = ious_flat.reshape(N, N)
+
+        # Keep only upper triangle
+        iou_matrix = torch.triu(iou_matrix, diagonal=1)
+
+        return iou_matrix, order, N
+
+    @torch.jit.script_if_tracing
     def _rotated_nms_vectorized(self, boxes: torch.Tensor, scores: torch.Tensor, iou_threshold: float) -> torch.Tensor:
         """Vectorized standard NMS with pre-computed IoU matrix.
 
         Computes full IoU matrix once, then applies sequential suppression logic.
         """
-        N = boxes.size(0)
-        _, order = torch.sort(scores, descending=True)
-        boxes_sorted = boxes[order]
-
-        # Prepare paired inputs for IoU computation: expand to [N*N, 5]
-        boxes_i = boxes_sorted.unsqueeze(1).expand(N, N, 5).reshape(-1, 5)  # [N*N, 5]
-        boxes_j = boxes_sorted.unsqueeze(0).expand(N, N, 5).reshape(-1, 5)  # [N*N, 5]
-
-        # Compute IoU for all pairs
-        ious_flat = self.iou_calculator(boxes_i, boxes_j)  # [N*N]
-        iou_matrix = ious_flat.reshape(N, N)  # [N, N]
-
-        # Keep only upper triangle
-        iou_matrix = torch.triu(iou_matrix, diagonal=1)
+        iou_matrix, order, N = self._compute_iou_matrix(boxes, scores)
 
         # Standard NMS: sequential suppression based on pre-computed IoUs
         suppress = iou_matrix > iou_threshold
@@ -201,20 +218,7 @@ class NMS(nn.Module):
         Computes full IoU matrix once, then applies parallel suppression.
         More aggressive than standard NMS: suppresses box j if ANY higher-scoring box i has IoU(i,j) > threshold.
         """
-        N = boxes.size(0)
-        _, order = torch.sort(scores, descending=True)
-        boxes_sorted = boxes[order]
-
-        # Prepare paired inputs for IoU computation: expand to [N*N, 5]
-        boxes_i = boxes_sorted.unsqueeze(1).expand(N, N, 5).reshape(-1, 5)  # [N*N, 5]
-        boxes_j = boxes_sorted.unsqueeze(0).expand(N, N, 5).reshape(-1, 5)  # [N*N, 5]
-
-        # Compute IoU for all pairs
-        ious_flat = self.iou_calculator(boxes_i, boxes_j)  # [N*N]
-        iou_matrix = ious_flat.reshape(N, N)  # [N, N]
-
-        # Keep only upper triangle
-        iou_matrix = torch.triu(iou_matrix, diagonal=1)
+        iou_matrix, order, N = self._compute_iou_matrix(boxes, scores)
 
         # Fast-NMS: parallel suppression
         # Box j is suppressed if ANY higher-scoring box i has IoU(i,j) > threshold
@@ -229,32 +233,26 @@ class NMS(nn.Module):
 
         Original implementation - slowest but uses minimal memory O(N).
         """
-        _, order = torch.sort(scores, descending=True)
+        order = torch.argsort(scores, descending=True)
         keep_mask = torch.ones(boxes.size(0), dtype=torch.bool, device=boxes.device)
 
         for i in range(boxes.size(0)):
             if not keep_mask[order[i]]:
                 continue
 
-            # Get current box
             current_idx = order[i]
             current_box = boxes[current_idx : current_idx + 1]
-            # Get all remaining boxes that haven't been suppressed yet
             remaining_indices = order[i + 1 :]
             remaining_mask = keep_mask[remaining_indices]
 
             if not remaining_mask.any():
                 break
 
-            # Filter remaining_indices to only include boxes that haven't been suppressed yet
-            # Note: keep_mask gets updated at every iteration with more False values,
-            # so we need to filter remaining_indices using the current state of keep_mask
             remaining_boxes = boxes[remaining_indices[remaining_mask]]
             current_boxes_expanded = current_box.expand(remaining_boxes.size(0), -1)
 
             ious = self.iou_calculator(current_boxes_expanded, remaining_boxes)
 
-            # Suppress boxes with IoU > threshold
             suppress_mask = ious > iou_threshold
             remaining_indices_to_suppress = remaining_indices[remaining_mask][suppress_mask]
             keep_mask[remaining_indices_to_suppress] = False

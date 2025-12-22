@@ -4,14 +4,14 @@ import torch
 from rotated.boxes.nms import NMS
 
 
-@pytest.fixture()
-def nms():
+@pytest.fixture
+def nms() -> NMS:
     return NMS()
 
 
-def test_rotated_nms_suppresses_overlapping_boxes(nms):
-    """Test that overlapping boxes are properly suppressed."""
-    # Two highly overlapping boxes + one separate box
+@pytest.fixture
+def overlapping_boxes() -> tuple[torch.Tensor, torch.Tensor]:
+    """Two overlapping boxes + one separate box."""
     boxes = torch.tensor(
         [
             [100.0, 100.0, 50.0, 30.0, 0.0],  # Box 1
@@ -19,7 +19,42 @@ def test_rotated_nms_suppresses_overlapping_boxes(nms):
             [300.0, 300.0, 40.0, 25.0, 0.0],  # Box 3 - separate
         ]
     )
-    scores = torch.tensor([0.9, 0.8, 0.7])  # Box 1 has highest score
+    scores = torch.tensor([0.9, 0.8, 0.7])
+    return boxes, scores
+
+
+@pytest.fixture
+def non_overlapping_boxes() -> tuple[torch.Tensor, torch.Tensor]:
+    """Three well-separated boxes."""
+    boxes = torch.tensor(
+        [
+            [100.0, 100.0, 30.0, 20.0, 0.0],
+            [200.0, 200.0, 30.0, 20.0, 0.0],
+            [300.0, 300.0, 30.0, 20.0, 0.0],
+        ]
+    )
+    scores = torch.tensor([0.9, 0.8, 0.7])
+    return boxes, scores
+
+
+@pytest.fixture
+def two_overlapping_boxes() -> tuple[torch.Tensor, torch.Tensor]:
+    """Two overlapping boxes only."""
+    boxes = torch.tensor(
+        [
+            [100.0, 100.0, 50.0, 30.0, 0.0],
+            [102.0, 102.0, 52.0, 32.0, 0.0],  # Overlaps with first
+        ]
+    )
+    scores = torch.tensor([0.9, 0.8])
+    return boxes, scores
+
+
+def test_rotated_nms_suppresses_overlapping_boxes(
+    nms: NMS, overlapping_boxes: tuple[torch.Tensor, torch.Tensor]
+) -> None:
+    """Test that overlapping boxes are properly suppressed."""
+    boxes, scores = overlapping_boxes
 
     keep = nms.rotated_nms(boxes, scores, iou_threshold=0.3)
 
@@ -31,17 +66,11 @@ def test_rotated_nms_suppresses_overlapping_boxes(nms):
     assert 1 not in keep  # Overlapping box with lower score should be suppressed
 
 
-def test_rotated_nms_preserves_non_overlapping(nms):
+def test_rotated_nms_preserves_non_overlapping(
+    nms: NMS, non_overlapping_boxes: tuple[torch.Tensor, torch.Tensor]
+) -> None:
     """Test that non-overlapping boxes are all preserved."""
-    # Three well-separated boxes
-    boxes = torch.tensor(
-        [
-            [100.0, 100.0, 30.0, 20.0, 0.0],
-            [200.0, 200.0, 30.0, 20.0, 0.0],
-            [300.0, 300.0, 30.0, 20.0, 0.0],
-        ]
-    )
-    scores = torch.tensor([0.9, 0.8, 0.7])
+    boxes, scores = non_overlapping_boxes
 
     keep = nms.rotated_nms(boxes, scores, iou_threshold=0.5)
 
@@ -50,16 +79,11 @@ def test_rotated_nms_preserves_non_overlapping(nms):
     assert torch.equal(keep, torch.tensor([0, 1, 2]))  # Sorted by score
 
 
-def test_multiclass_nms_preserves_different_classes(nms):
+def test_multiclass_nms_preserves_different_classes(
+    nms: NMS, two_overlapping_boxes: tuple[torch.Tensor, torch.Tensor]
+) -> None:
     """Test that overlapping boxes from different classes are preserved."""
-    # Two overlapping boxes but different classes
-    boxes = torch.tensor(
-        [
-            [100.0, 100.0, 50.0, 30.0, 0.0],
-            [102.0, 102.0, 52.0, 32.0, 0.0],  # Overlaps with first
-        ]
-    )
-    scores = torch.tensor([0.9, 0.8])
+    boxes, scores = two_overlapping_boxes
     labels = torch.tensor([0, 1])  # Different classes
 
     keep = nms(boxes, scores, labels, iou_threshold=0.5)
@@ -70,16 +94,11 @@ def test_multiclass_nms_preserves_different_classes(nms):
     assert 1 in keep
 
 
-def test_multiclass_nms_suppresses_same_class(nms):
+def test_multiclass_nms_suppresses_same_class(
+    nms: NMS, two_overlapping_boxes: tuple[torch.Tensor, torch.Tensor]
+) -> None:
     """Test that overlapping boxes from same class are suppressed."""
-    # Two overlapping boxes, same class
-    boxes = torch.tensor(
-        [
-            [100.0, 100.0, 50.0, 30.0, 0.0],
-            [102.0, 102.0, 52.0, 32.0, 0.0],  # Overlaps with first
-        ]
-    )
-    scores = torch.tensor([0.9, 0.8])
+    boxes, scores = two_overlapping_boxes
     labels = torch.tensor([0, 0])  # Same class
 
     keep = nms(boxes, scores, labels, iou_threshold=0.5)
@@ -89,7 +108,7 @@ def test_multiclass_nms_suppresses_same_class(nms):
     assert keep[0] == 0  # Higher score
 
 
-def test_batched_nms_handles_different_scenarios(nms):
+def test_batched_nms_handles_different_scenarios(nms: NMS) -> None:
     """Test batched NMS with different scenarios per batch."""
     # Batch 1: 3 non-overlapping boxes
     # Batch 2: 2 overlapping boxes (one will be suppressed) + 1 separate
@@ -136,20 +155,20 @@ def test_batched_nms_handles_different_scenarios(nms):
         ({"iou_kwargs": {"bad_param": 1.0}}, "Parameter 'bad_param' is not supported"),
     ],
 )
-def test_wrong_iou_params(argument, match):
+def test_wrong_iou_params(argument: dict, match: str) -> None:
     """Test that error is raised when bad IoU params are passed to NMS"""
     with pytest.raises(ValueError, match=match):
         NMS(**argument)
 
 
-def test_correct_nms_params():
+def test_correct_nms_params() -> None:
     nms = NMS(nms_thresh=0.1, iou_method="precise_rotated_iou", iou_kwargs={"eps": 1e-3})
     assert nms.nms_thresh == 0.1
     assert nms.iou_calculator.__class__.__name__ == "PreciseRotatedIoU"
     assert nms.iou_calculator.eps == 1e-3
 
 
-def test_torchscript_compatibility(nms):
+def test_torchscript_compatibility(nms: NMS) -> None:
     """Test TorchScript compilation works correctly."""
     boxes = torch.tensor(
         [
@@ -169,3 +188,16 @@ def test_torchscript_compatibility(nms):
 
     # Results should be identical
     assert torch.allclose(scripted_result, eager_result)
+
+
+@pytest.mark.parametrize("nms_mode", ["sequential", "vectorized", "fast"])
+def test_nms_modes(nms_mode: str, overlapping_boxes: tuple[torch.Tensor, torch.Tensor]) -> None:
+    """Test that all three NMS modes work correctly."""
+    nms = NMS(nms_mode=nms_mode)
+    boxes, scores = overlapping_boxes
+
+    keep = nms.rotated_nms(boxes, scores, iou_threshold=0.3)
+
+    assert len(keep) == 2
+    assert 0 in keep
+    assert 2 in keep
