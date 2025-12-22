@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn as nn
 
-from rotated.boxes.nms import NMS
+from rotated.boxes.nms import NMS, NMS_MODE
 
 if TYPE_CHECKING:
     from rotated.iou import IoUKwargs, IoUMethodName
@@ -27,6 +27,11 @@ class DetectionPostProcessor(nn.Module):
         topk_candidates: Number of top candidates to consider before NMS
         iou_method: Method name to compute Intersection Over Union
         iou_kwargs: Dictionary with parameters for the IoU method.
+        nms_mode: NMS algorithm mode. Options:
+            - "sequential": Original implementation (lowest memory, slowest)
+            - "vectorized": Standard NMS with vectorized IoU (default, ~20-30x faster)
+            - "fast": Fast-NMS algorithm (~50-100x faster, slightly more aggressive)
+
     """
 
     def __init__(
@@ -37,13 +42,19 @@ class DetectionPostProcessor(nn.Module):
         topk_candidates: int = 1000,
         iou_method: "IoUMethodName" = "approx_sdf_l1",
         iou_kwargs: "IoUKwargs" = None,
+        nms_mode: NMS_MODE = "vectorized",
     ):
         super().__init__()
         self.score_thresh = score_thresh
         self.nms_thresh = nms_thresh
         self.detections_per_img = detections_per_img
         self.topk_candidates = topk_candidates
-        self.nms = NMS(nms_thresh=nms_thresh, iou_method=iou_method, iou_kwargs=iou_kwargs)
+        self.nms = NMS(
+            nms_thresh=nms_thresh,
+            iou_method=iou_method,
+            iou_kwargs=iou_kwargs,
+            nms_mode=nms_mode,
+        )
 
     @torch.jit.script_if_tracing
     def forward(
