@@ -1,6 +1,6 @@
 """Module to run the Non Maximum Suppression algorithm."""
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 import torch
 import torch.nn as nn
@@ -9,6 +9,8 @@ from rotated.iou import iou_picker
 
 if TYPE_CHECKING:
     from rotated.iou import IoUKwargs, IoUMethodName
+
+NMS_MODE: TypeAlias = Literal["sequential", "vectorized", "fast"]
 
 
 class NMS(nn.Module):
@@ -34,7 +36,7 @@ class NMS(nn.Module):
         nms_thresh: float = 0.5,
         iou_method: "IoUMethodName" = "approx_sdf_l1",
         iou_kwargs: "IoUKwargs" = None,
-        nms_mode: Literal["sequential", "vectorized", "fast"] = "vectorized",
+        nms_mode: NMS_MODE = "vectorized",
     ):
         super().__init__()
         self.nms_thresh = nms_thresh
