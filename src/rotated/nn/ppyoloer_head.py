@@ -1,6 +1,60 @@
 # Modified from PaddleDetection (https://github.com/PaddlePaddle/PaddleDetection)
 # Copyright (c) 2024 PaddlePaddle Authors. Apache 2.0 License.
 
+"""PP-YOLOE-R detection head for rotated object detection.
+
+This module implements the detection head for PP-YOLOE-R, a high-performance anchor-free detector for rotated
+bounding boxes. The head processes multi-scale features from a Feature Pyramid Network (FPN) and produces
+predictions for object classification, bounding box coordinates, and rotation angles.
+
+Architecture:
+    The head uses Efficient Squeeze-and-Excitation (ESE) attention modules to enhance feature representations before
+    making predictions. Separate prediction branches handle classification, box regression, and angle prediction,
+    enabling specialized feature learning for each task.
+
+Key Features:
+
+    - Anchor-free design: Predicts directly from grid points without predefined anchor boxes
+    - Multi-scale prediction: Processes features at multiple FPN levels (typically stride 8/16/32)
+    - ESE attention: Enhances features through efficient channel attention mechanisms
+    - Flexible box regression: Supports standard offset-scale or Distribution Focal Loss (DFL) modes
+    - Flexible angle prediction: Supports binned (classification) or continuous (regression) modes
+    - Cached anchor generation: Efficiently reuses anchor points for improved performance
+
+Prediction Modes:
+
+    Bounding Box Regression:
+
+        - Standard mode (use_dfl=False): Predicts center offsets and size scales relative to
+          anchor points. Box dimensions decoded as: size = (ELU(scale) + 1) * stride
+        - DFL mode (use_dfl=True): Predicts LTRB distances as distributions over discrete bins,
+          with the expected value providing the final localization
+
+    Angle Prediction:
+
+        - Binned mode (use_angle_bins=True): Predicts a distribution over angle_max+1 discrete
+          bins spanning [0, π/2]. Final angle computed via weighted sum of bin centers.
+        - Continuous mode (use_angle_bins=False): Predicts a single angle value, constrained
+          to [0, π/2] via sigmoid activation
+
+Output Format:
+    During forward pass, the head returns:
+
+        - losses: Loss components (LossComponents namedtuple) if targets provided, else zeros
+        - cls_scores: Classification probabilities [B, N, num_classes] after sigmoid
+        - decoded_boxes: Rotated boxes [B, N, 5] in pixel space (cx, cy, w, h, angle)
+
+Example:
+    >>> head = PPYOLOERHead(
+    ...     in_channels=[192, 384, 768],
+    ...     num_classes=15,
+    ...     fpn_strides=[8, 16, 32],
+    ...     use_dfl=False,
+    ...     use_angle_bins=True,
+    ...     angle_max=90
+    ... )
+    >>> losses, cls_scores, boxes = head(feats, targets=targets)
+"""
 
 from collections.abc import Sequence
 import math
@@ -41,25 +95,32 @@ class ESEAttn(nn.Module):
 class PPYOLOERHead(nn.Module):
     """PP-YOLOE-R detection head for rotated object detection.
 
-    Supports two prediction modes:
-    - Standard (use_dfl=False): xy_offset + wh_scale regression
-    - DFL (use_dfl=True): LTRB distances with distribution modeling
+    Supports two bounding box regression modes:
 
-    Supports two angle modes:
-    - Binned (use_angle_bins=True): angle_max+1 outputs with softmax
-    - Continuous (use_angle_bins=False): single output with sigmoid to [0, π/2]
+    - Standard mode (use_dfl=False): Predicts box offsets (xy_offset) and scales (wh_scale)
+      relative to anchor points. Box dimensions are decoded using ELU activation: size = (ELU(scale) + 1) * stride.
+    - DFL mode (use_dfl=True): Predicts LTRB (left-top-right-bottom) distances as distributions
+      over discrete bins. The expected value of each distribution gives the final distance, enabling
+      finer-grained localization through distribution modeling.
+
+    Supports two angle prediction modes:
+
+    - Binned mode (use_angle_bins=True): Predicts angle as a softmax distribution over angle_max+1 bins
+      spanning [0, π/2]. Final angle is computed as weighted sum of bin centers.
+    - Continuous mode (use_angle_bins=False): Predicts a single continuous angle value with sigmoid
+      activation to constrain output to [0, π/2] range.
 
     Args:
-        in_channels: Input channels for each FPN level
+        in_channels: Input channels for each FPN level (e.g., [192, 384, 768])
         num_classes: Number of object classes
-        act: Activation function name
-        fpn_strides: Strides for each FPN level
-        grid_cell_offset: Grid cell offset for anchor generation
-        angle_max: Number of angle bins
-        use_dfl: Enable Distribution Focal Loss
-        reg_max: Number of DFL bins
-        use_angle_bins: Enable binned angle prediction
-        criterion: Loss criterion module
+        act: Activation function name ('swish', 'relu', etc.)
+        fpn_strides: Strides for each FPN level (e.g., [8, 16, 32])
+        grid_cell_offset: Grid cell offset for anchor generation (typically 0.5 for cell center)
+        angle_max: Number of angle bins (e.g., 90 for 1-degree resolution)
+        use_dfl: If True, use Distribution Focal Loss mode; if False, use standard regression
+        reg_max: Number of DFL bins for distance discretization (only used when use_dfl=True)
+        use_angle_bins: If True, use binned angle prediction; if False, use continuous angle
+        criterion: Loss criterion module for computing losses during training
 
     Raises:
         ValueError: If any input validation fails

@@ -3,8 +3,48 @@
 
 """Loss criterion for PP-YOLOE-R rotated object detection.
 
-Provides flexible classification losses (BCE, focal, varifocal) and optional
-Distribution Focal Loss for bbox regression.
+This module implements a flexible multi-component loss function for training rotated object
+detection models. It combines classification, bounding box regression, and angle prediction
+losses with task-aligned assignment for optimal anchor-to-ground-truth matching.
+
+Key Features:
+
+    - Task-aligned assignment: Dynamically assigns ground truth objects to anchors based on
+      alignment metrics that combine classification confidence and localization quality.
+    - Flexible classification losses: Supports BCE, focal loss, and varifocal loss to handle
+      class imbalance and focus on hard examples.
+    - Dual bbox regression modes: Standard regression or Distribution Focal Loss (DFL) for
+      finer-grained localization through distribution modeling.
+    - Dual angle prediction modes: Binned (distribution over discrete angles) or continuous
+      (direct angle regression) with appropriate loss functions for each.
+    - ProbIoU loss: Uses probabilistic IoU for rotated boxes that handles varying uncertainty
+      in box predictions.
+
+Components:
+
+    - RotatedDetectionLoss: Main loss module that orchestrates all loss components
+    - LossComponents: Named tuple container for individual loss values
+    - LossWeights: Type definition for loss component weights
+    - AssignerConfig: Configuration for task-aligned assignment
+    - FocalConfig: Configuration for focal loss parameters
+
+Example:
+    >>> criterion = RotatedDetectionLoss(
+    ...     num_classes=15,
+    ...     use_angle_bins=True,
+    ...     angle_bins=90,
+    ...     use_dfl=False
+    ... )
+    >>> losses = criterion(
+    ...     cls_logits=cls_logits,
+    ...     reg_dist=reg_dist,
+    ...     raw_angles=raw_angles,
+    ...     decoded_boxes=decoded_boxes,
+    ...     targets=targets,
+    ...     anchor_points=anchor_points,
+    ...     stride_tensor=stride_tensor
+    ... )
+    >>> total_loss = losses.total
 """
 
 from collections import namedtuple
@@ -80,16 +120,29 @@ class LossComponents(namedtuple("LossComponents", ["total", "cls", "box", "angle
 class RotatedDetectionLoss(nn.Module):
     """Loss criterion for rotated object detection.
 
+    Supports two bounding box regression modes:
+
+    - Standard mode (use_dfl=False): Direct regression of box parameters with IoU-based loss.
+    - DFL mode (use_dfl=True): Distribution Focal Loss that models box coordinates as
+      distributions over discrete bins, providing finer-grained localization.
+
+    Supports two angle prediction modes:
+
+    - Binned mode (use_angle_bins=True): Predicts angle as a distribution over bins,
+      using soft cross-entropy loss with linear interpolation between adjacent bins.
+    - Continuous mode (use_angle_bins=False): Predicts angle directly as a continuous value,
+      using circular smooth L1 loss that respects angle periodicity.
+
     Args:
         num_classes: Number of object classes
-        loss_weights: Weights for each component
-        cls_loss_type: Classification loss type
-        assigner_config: Task-aligned assigner configuration
-        focal_config: Focal loss parameters
-        use_angle_bins: Enable binned angle prediction
-        angle_bins: Number of angle bins
-        use_dfl: Enable Distribution Focal Loss for bbox regression
-        reg_max: Number of DFL bins
+        loss_weights: Weights for each loss component (cls, box, angle, dfl)
+        cls_loss_type: Classification loss type ('varifocal', 'focal', or 'bce')
+        assigner_config: Task-aligned assigner configuration (topk, alpha, beta)
+        focal_config: Focal loss parameters (alpha, gamma)
+        use_angle_bins: If True, use binned angle prediction; if False, use continuous angle
+        angle_bins: Number of angle bins (only used when use_angle_bins=True)
+        use_dfl: If True, use Distribution Focal Loss for bbox regression; if False, use standard regression
+        reg_max: Number of DFL bins (only used when use_dfl=True)
     """
 
     def __init__(
@@ -147,12 +200,7 @@ class RotatedDetectionLoss(nn.Module):
             reg_dist: Raw regression predictions [B, N, 4*reg_max] or [B, N, 4]
             raw_angles: Raw angle predictions [B, N, angle_bins+1] or [B, N, 1]
             decoded_boxes: Decoded boxes in pixels [B, N, 5]
-            targets: Ground truth data:
-                - labels: [B, M, 1] - Class labels [0, num_classes-1]
-                - boxes: [B, M, 5] - Rotated GT boxes [cx, cy, w, h, angle]
-                    * cx, cy, w, h: in absolute pixels
-                    * angle: in radians, should be in range [0, π/2)
-                - valid_mask: [B, M, 1] - Valid target mask
+            targets: Ground truth with 'labels', 'boxes' (pixels), 'valid_mask'
             anchor_points: Anchor points in pixels [1, N, 2]
             stride_tensor: Stride values [1, N, 1]
 
@@ -181,9 +229,9 @@ class RotatedDetectionLoss(nn.Module):
         loss_box = self._box_loss(decoded_boxes, assigned_boxes, assigned_labels, assigned_scores, stride_tensor)
 
         if self.use_angle_bins:
-            loss_angle = self._angle_loss(raw_angles, assigned_boxes, assigned_labels)
+            loss_angle = self._angle_loss_binned(raw_angles, assigned_boxes, assigned_labels)
         else:
-            loss_angle = torch.tensor(0.0, device=cls_logits.device)
+            loss_angle = self._angle_loss_continuous(raw_angles, assigned_boxes, assigned_labels)
 
         if self.use_dfl:
             loss_dfl = self._dfl_loss(
@@ -281,35 +329,6 @@ class RotatedDetectionLoss(nn.Module):
         normalizer = torch.clamp(target_scores.sum(), min=1.0)
         return weighted_loss / normalizer
 
-    def _angle_loss(
-        self,
-        pred_angles: torch.Tensor,
-        target_boxes: torch.Tensor,
-        target_labels: torch.Tensor,
-    ) -> torch.Tensor:
-        """Compute angle distribution loss."""
-        positive_mask = target_labels != self.num_classes
-        num_positives = positive_mask.sum()
-
-        if num_positives == 0:
-            return pred_angles.sum() * 0.0
-
-        pred_angle_pos = pred_angles[positive_mask]
-        target_angle_pos = target_boxes[positive_mask][:, 4]
-
-        target_bins = target_angle_pos / self.angle_scale
-        target_bins = torch.clamp(target_bins, 0, self.angle_bins - 0.01)
-
-        left_idx = target_bins.long()
-        right_idx = torch.clamp(left_idx + 1, max=self.angle_bins)
-
-        left_weight = right_idx.float() - target_bins
-        right_weight = 1.0 - left_weight
-
-        loss_left = F.cross_entropy(pred_angle_pos, left_idx, reduction="none") * left_weight
-        loss_right = F.cross_entropy(pred_angle_pos, right_idx, reduction="none") * right_weight
-        return (loss_left + loss_right).mean()
-
     def _dfl_loss(
         self,
         pred_dist: torch.Tensor,
@@ -379,3 +398,83 @@ class RotatedDetectionLoss(nn.Module):
 
         target_scores_sum = torch.clamp(target_scores.sum(), min=1.0)
         return weighted_loss / target_scores_sum
+
+    def _angle_loss_binned(
+        self,
+        pred_angles: torch.Tensor,
+        target_boxes: torch.Tensor,
+        target_labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute binned angle prediction loss using soft cross-entropy.
+
+        Converts continuous target angles to soft labels over adjacent bins using linear interpolation, then
+        computes weighted cross-entropy loss.
+
+        Args:
+            pred_angles: Predicted angle logits [B, N, angle_bins+1]
+            target_boxes: Ground truth boxes [B, N, 5] where [..., 4] is angle in radians
+            target_labels: Assigned class labels [B, N]
+
+        Returns:
+            Scalar loss value
+        """
+        positive_mask = target_labels != self.num_classes
+        num_positives = positive_mask.sum()
+
+        if num_positives == 0:
+            return pred_angles.sum() * 0.0
+
+        pred_angle_pos = pred_angles[positive_mask]
+        target_angle_pos = target_boxes[positive_mask][:, 4]
+
+        target_bins = target_angle_pos / self.angle_scale
+        target_bins = torch.clamp(target_bins, 0, self.angle_bins - 0.01)
+
+        left_idx = target_bins.long()
+        right_idx = torch.clamp(left_idx + 1, max=self.angle_bins)
+
+        left_weight = right_idx.float() - target_bins
+        right_weight = 1.0 - left_weight
+
+        loss_left = F.cross_entropy(pred_angle_pos, left_idx, reduction="none") * left_weight
+        loss_right = F.cross_entropy(pred_angle_pos, right_idx, reduction="none") * right_weight
+        return (loss_left + loss_right).mean()
+
+    def _angle_loss_continuous(
+        self,
+        pred_angles: torch.Tensor,
+        target_boxes: torch.Tensor,
+        target_labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute continuous angle prediction loss using circular smooth L1.
+
+        Uses smooth L1 loss that respects angle periodicity at the [0, π/2] boundaries.
+        This handles cases where angles near 0 and π/2 should be considered close.
+
+        Args:
+            pred_angles: Predicted angles [B, N, 1] in radians, range [0, π/2]
+            target_boxes: Ground truth boxes [B, N, 5] where [..., 4] is angle in radians
+            target_labels: Assigned class labels [B, N]
+
+        Returns:
+            Scalar loss value
+        """
+        positive_mask = target_labels != self.num_classes
+        num_positives = positive_mask.sum()
+
+        if num_positives == 0:
+            return pred_angles.sum() * 0.0
+
+        pred_angle_pos = pred_angles[positive_mask].squeeze(-1)
+        target_angle_pos = target_boxes[positive_mask][:, 4]
+
+        # Compute angular difference respecting [0, π/2] periodicity
+        diff = torch.abs(pred_angle_pos - target_angle_pos)
+        half_pi = math.pi / 2
+        diff = torch.minimum(diff, half_pi - diff)
+
+        # Smooth L1 loss
+        beta = 0.1
+        loss = torch.where(diff < beta, 0.5 * diff.pow(2) / beta, diff - 0.5 * beta)
+
+        return loss.mean()
