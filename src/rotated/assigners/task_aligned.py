@@ -154,7 +154,8 @@ class BaseTaskAlignedAssigner(nn.Module):
         batch_size, *_ = gt_boxes.shape
 
         # Ensure anchor_points has the expected shape
-        assert anchor_points.shape[0] == 1, f"Expected anchor_points shape [1, L, 2], got {anchor_points.shape}"
+        if anchor_points.shape[0] != 1:
+            raise ValueError(f"Expected anchor_points shape [1, L, 2], got {anchor_points.shape}")
 
         # Choose spatial checking function based on box format
         if self.box_format == "rotated":
@@ -200,29 +201,58 @@ class BaseTaskAlignedAssigner(nn.Module):
         return pred_scores[batch_idx, pred_idx, class_idx]
 
     def _select_topk(self, scores: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
-        """Select top-k scoring anchors for each ground truth object."""
+        """Select top-k scoring anchors for each ground truth object.
+
+        This method selects the top-k highest scoring anchors for each GT object based on
+        the alignment metric. Anchors that appear in the top-k for multiple GT objects are
+        filtered out to avoid ambiguous assignments during training.
+
+        Args:
+            scores: Alignment scores of shape [B, N, L] where B is batch size,
+                    N is number of GT objects, and L is number of anchors
+            valid_mask: Boolean mask of shape [B, N, 1] indicating valid GT objects
+
+        Returns:
+            topk_mask: Binary mask of shape [B, N, L] where True indicates an anchor
+                    is in the top-k for that GT object
+        """
         batch_size, num_gts, num_anchors = scores.shape
         actual_topk = min(self.topk, num_anchors)
 
-        # Get top-k indices for each GT object
+        # Get top-k indices for each GT object along the anchor dimension
         _, topk_indices = torch.topk(scores, k=actual_topk, dim=-1, largest=True, sorted=False)
 
         # Create binary mask for top-k selections
         topk_mask = torch.zeros_like(scores, dtype=torch.bool)
 
-        # Index tensors for scatter operation
+        # Prepare index tensors for advanced indexing
         batch_idx = torch.arange(batch_size, device=scores.device)[:, None, None]
         gt_idx = torch.arange(num_gts, device=scores.device)[None, :, None]
 
+        # Expand indices to match the shape [B, N, topk]
         batch_idx = batch_idx.expand(-1, num_gts, actual_topk)
         gt_idx = gt_idx.expand(batch_size, -1, actual_topk)
 
-        # Set top-k positions to True
+        # Set selected top-k positions to True
         topk_mask[batch_idx, gt_idx, topk_indices] = True
 
-        # Apply validity mask
+        # Apply validity mask to exclude invalid GT objects
         valid_expanded = valid_mask.squeeze(-1).bool().unsqueeze(-1)
-        return (topk_mask & valid_expanded).float()
+        topk_mask = topk_mask & valid_expanded
+
+        # Count how many GT objects selected each anchor as top-k
+        # Shape: [B, L] where each value is the count of GTs that selected this anchor
+        count_per_anchor = topk_mask.float().sum(dim=1)
+
+        # Create mask for anchors selected by at most one GT object
+        # Anchors selected by multiple GTs are ambiguous and are excluded
+        # Shape: [B, 1, L] for broadcasting
+        single_gt_mask = (count_per_anchor <= 1).unsqueeze(1)
+
+        # Apply the single GT mask to filter out ambiguous anchors
+        topk_mask = topk_mask & single_gt_mask
+
+        return topk_mask.float()
 
     def _resolve_conflicts(self, mask: torch.Tensor, ious: torch.Tensor) -> torch.Tensor:
         """Resolve assignment conflicts when anchors match multiple GT objects."""
