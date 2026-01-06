@@ -217,27 +217,37 @@ class BaseTaskAlignedAssigner(nn.Module):
 
         topk_metrics, topk_indices = torch.topk(scores, k=actual_topk, dim=-1, largest=True, sorted=False)
 
-        # Only keep topk candidates with non-zero scores
-        topk_mask_valid = (topk_metrics.max(-1, keepdim=True)[0] > self.eps).expand_as(topk_indices)
+        # Filter out topk candidates with zero scores
+        topk_mask_valid = topk_metrics > self.eps  # [B, N, actual_topk]
 
-        topk_indices_masked = topk_indices.clone()
-        topk_indices_masked.masked_fill_(~topk_mask_valid, 0)
+        # Create binary mask for top-k selections
+        topk_mask = torch.zeros_like(scores, dtype=torch.bool)
+
+        # Prepare index tensors for advanced indexing
+        batch_idx = torch.arange(batch_size, device=scores.device)[:, None, None]
+        gt_idx = torch.arange(num_gts, device=scores.device)[None, :, None]
+
+        # Expand indices to match shape [B, N, topk]
+        batch_idx = batch_idx.expand(-1, num_gts, actual_topk)
+        gt_idx = gt_idx.expand(batch_size, -1, actual_topk)
+
+        # Set selected top-k positions to True, but only for valid topk candidates
+        topk_mask[batch_idx, gt_idx, topk_indices] = topk_mask_valid
 
         # Apply validity mask for invalid GT objects
-        valid_expanded = valid_mask.squeeze(-1).bool().unsqueeze(-1).expand_as(topk_indices_masked)
-        topk_indices_masked.masked_fill_(~valid_expanded, 0)
+        valid_expanded = valid_mask.squeeze(-1).bool().unsqueeze(-1)
+        topk_mask = topk_mask & valid_expanded
 
-        # Count how many times each anchor is selected
-        count_tensor = torch.zeros(scores.shape, dtype=torch.int8, device=scores.device)
-        ones = torch.ones_like(topk_indices_masked[:, :, :1], dtype=torch.int8)
+        # Count how many GTs selected each anchor
+        count_per_anchor = topk_mask.sum(dim=1)  # [B, L]
 
-        for k in range(actual_topk):
-            count_tensor.scatter_add_(-1, topk_indices_masked[:, :, k : k + 1], ones)
+        # Create mask for anchors selected by at most one GT
+        single_gt_mask = (count_per_anchor <= 1).unsqueeze(1)  # [B, 1, L]
 
         # Filter out anchors selected by multiple GTs
-        count_tensor.masked_fill_(count_tensor > 1, 0)
+        topk_mask = topk_mask & single_gt_mask
 
-        return count_tensor.to(scores.dtype)
+        return topk_mask.float()
 
     def _resolve_conflicts(self, mask: torch.Tensor, ious: torch.Tensor) -> torch.Tensor:
         """Resolve assignment conflicts when anchors match multiple GT objects."""
