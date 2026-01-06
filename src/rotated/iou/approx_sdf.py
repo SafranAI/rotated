@@ -10,7 +10,7 @@ from rotated.boxes.utils import check_aabb_overlap
 
 
 class ApproxSDFL1:
-    def __init__(self, n_samples: int = 100):
+    def __init__(self, n_samples: int = 40):
         self.n_samples = n_samples
 
     def __call__(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
@@ -37,12 +37,12 @@ class ApproxSDFL1:
         target_area = target_candidates[:, 2] * target_candidates[:, 3]
 
         a_extra = _saf_obox2obox_vec(pred_candidates, target_candidates, n_samples=self.n_samples)
-        union = target_area + a_extra.float()
+        union = target_area + a_extra
         ious[candidates] = (pred_area + target_area) / union - 1
         return ious
 
 
-def _saf_obox2obox_vec(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_samples: int = 100) -> torch.Tensor:
+def _saf_obox2obox_vec(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_samples: int = 40) -> torch.Tensor:
     """Vectorized implementation of Signed area difference formed between pairs of predictions and target boxes.
 
     Args:
@@ -84,10 +84,10 @@ def _saf_obox2obox_vec(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_s
     dy = torch.gradient(ppy, dim=1)[0]  # (n, n_samples, 4)
 
     safii = x_comp * dy - y_comp * dx
-    return safii.sum(dim=[-2, -1])
+    return safii.sum(dim=[-2, -1], dtype=pred_boxes.dtype)
 
 
-def _pairwise_saf_obox2obox(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_samples: int = 100) -> torch.Tensor:
+def _pairwise_saf_obox2obox(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_samples: int = 40) -> torch.Tensor:
     """Signed area difference between 2 sets of oriented boxes, vectorized
 
     Args:
