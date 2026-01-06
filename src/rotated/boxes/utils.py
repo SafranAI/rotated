@@ -88,12 +88,11 @@ def check_points_in_rotated_boxes(points: torch.Tensor, boxes: torch.Tensor) -> 
     rotated_x = local_points[:, :, 0] * cos_a - local_points[:, :, 1] * sin_a  # [N, M]
     rotated_y = local_points[:, :, 0] * sin_a + local_points[:, :, 1] * cos_a  # [N, M]
 
-    # Check if within box bounds
     half_w = boxes_exp[:, :, 2] * 0.5  # [N, 1]
     half_h = boxes_exp[:, :, 3] * 0.5  # [N, 1]
 
-    inside_x = torch.abs(rotated_x) <= half_w
-    inside_y = torch.abs(rotated_y) <= half_h
+    inside_x = torch.abs(rotated_x) < half_w
+    inside_y = torch.abs(rotated_y) < half_h
 
     result_flat = inside_x & inside_y  # [N, M]
 
@@ -148,12 +147,11 @@ def check_points_in_rotated_boxes_paired(points: torch.Tensor, boxes: torch.Tens
     rotated_x = local_points[:, :, 0] * cos_a - local_points[:, :, 1] * sin_a  # [N, M]
     rotated_y = local_points[:, :, 0] * sin_a + local_points[:, :, 1] * cos_a  # [N, M]
 
-    # Check if within box bounds
     half_w = (boxes[:, 2] * 0.5).unsqueeze(1)  # [N, 1]
     half_h = (boxes[:, 3] * 0.5).unsqueeze(1)  # [N, 1]
 
-    inside_x = torch.abs(rotated_x) <= half_w
-    inside_y = torch.abs(rotated_y) <= half_h
+    inside_x = torch.abs(rotated_x) < half_w
+    inside_y = torch.abs(rotated_y) < half_h
 
     result_flat = inside_x & inside_y  # [N, M]
 
@@ -192,8 +190,8 @@ def check_points_in_horizontal_boxes(points: torch.Tensor, boxes: torch.Tensor) 
     px_exp = px.unsqueeze(0)  # [1, L]
     py_exp = py.unsqueeze(0)  # [1, L]
 
-    inside_x = (px_exp >= x1) & (px_exp <= x2)
-    inside_y = (py_exp >= y1) & (py_exp <= y2)
+    inside_x = (px_exp > x1) & (px_exp < x2)
+    inside_y = (py_exp > y1) & (py_exp < y2)
 
     return inside_x & inside_y
 
