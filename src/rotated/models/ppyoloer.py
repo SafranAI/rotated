@@ -158,12 +158,7 @@ def create_ppyoloer_model(
     )
 
     # Create criterion
-    criterion = RotatedDetectionLoss(
-        num_classes=num_classes,
-        angle_bins=90,
-        use_varifocal=True,
-        loss_weights={"cls": 1.0, "box": 2.5, "angle": 0.05},
-    )
+    criterion = RotatedDetectionLoss(num_classes=num_classes)
 
     # Create head with integrated criterion
     head = PPYOLOERHead(
