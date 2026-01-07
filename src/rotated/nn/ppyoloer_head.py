@@ -148,7 +148,7 @@ class PPYOLOERHead(nn.Module):
             raise ValueError(f"num_classes must be positive, got {num_classes}")
         if angle_max <= 0:
             raise ValueError(f"angle_max must be positive, got {angle_max}")
-        if reg_max <= 0:
+        if use_dfl and reg_max <= 0:
             raise ValueError(f"reg_max must be positive, got {reg_max}")
         if len(fpn_strides) != len(in_channels):
             raise ValueError(f"fpn_strides length {len(fpn_strides)} must match in_channels length {len(in_channels)}")
@@ -208,9 +208,7 @@ class PPYOLOERHead(nn.Module):
             self.pred_angle.append(nn.Conv2d(in_c, angle_out_channels, 3, padding=1))
 
         self._init_weights()
-
-        if criterion is not None:
-            self._sync_criterion_config()
+        self._sync_criterion_config()
 
     def _sync_criterion_config(self) -> None:
         """Sync configuration to criterion."""

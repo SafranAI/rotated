@@ -27,6 +27,7 @@ Components:
     - LossWeights: Type definition for loss component weights
     - AssignerConfig: Configuration for task-aligned assignment
     - FocalConfig: Configuration for focal loss parameters
+    - AngleConfig: Configuration for angle loss parameters
 
 Example:
     >>> criterion = RotatedDetectionLoss(
@@ -84,7 +85,7 @@ class AssignerConfig(TypedDict):
         beta: Weight for IoU score in assignment
     """
 
-    topk: float
+    topk: int
     alpha: float
     beta: float
 
@@ -99,6 +100,18 @@ class FocalConfig(TypedDict):
 
     alpha: float
     gamma: float
+
+
+class AngleConfig(TypedDict):
+    """Configuration for angle loss parameters.
+
+    Used for consistency with other configuration dictionaries (FocalConfig, AssignerConfig).
+
+    Attributes:
+        beta: Smooth L1 threshold for continuous angle loss (only used when use_angle_bins=False)
+    """
+
+    beta: float
 
 
 class LossComponents(namedtuple("LossComponents", ["total", "cls", "box", "angle", "dfl"])):
@@ -139,6 +152,7 @@ class RotatedDetectionLoss(nn.Module):
         cls_loss_type: Classification loss type ('varifocal', 'focal', or 'bce')
         assigner_config: Task-aligned assigner configuration (topk, alpha, beta)
         focal_config: Focal loss parameters (alpha, gamma)
+        angle_config: Angle loss parameters (beta for smooth L1 threshold when use_angle_bins=False)
         use_angle_bins: If True, use binned angle prediction; if False, use continuous angle
         angle_bins: Number of angle bins (only used when use_angle_bins=True)
         use_dfl: If True, use Distribution Focal Loss for bbox regression; if False, use standard regression
@@ -152,6 +166,7 @@ class RotatedDetectionLoss(nn.Module):
         cls_loss_type: Literal["varifocal", "focal", "bce"] = "varifocal",
         assigner_config: AssignerConfig | None = None,
         focal_config: FocalConfig | None = None,
+        angle_config: AngleConfig | None = None,
         use_angle_bins: bool = True,
         angle_bins: int = 90,
         use_dfl: bool = False,
@@ -169,9 +184,11 @@ class RotatedDetectionLoss(nn.Module):
         self.loss_weights = loss_weights or {"cls": 1.0, "box": 2.5, "angle": 0.05, "dfl": 0.5}
         assigner_config = assigner_config or {"topk": 13, "alpha": 1.0, "beta": 6.0}
         focal_config = focal_config or {"alpha": 0.75, "gamma": 2.0}
+        angle_config = angle_config or {"beta": 0.1}
 
         self.focal_alpha = focal_config["alpha"]
         self.focal_gamma = focal_config["gamma"]
+        self.angle_beta = angle_config["beta"]
         self.angle_scale = math.pi / 2 / angle_bins
 
         self.assigner = RotatedTaskAlignedAssigner(**assigner_config)
@@ -265,36 +282,56 @@ class RotatedDetectionLoss(nn.Module):
         base_loss = F.binary_cross_entropy_with_logits(pred_logits, target_scores, reduction="none")
         return base_loss.sum() / assigned_scores_sum
 
-    def _varifocal_loss(
-        self, pred_logits: torch.Tensor, target_scores: torch.Tensor, target_labels: torch.Tensor
+    def _weighted_focal_loss(
+        self, pred_logits: torch.Tensor, target_scores: torch.Tensor, focal_weight: torch.Tensor
     ) -> torch.Tensor:
-        """Varifocal loss."""
+        """Compute focal loss with given weights."""
         assigned_scores_sum = torch.clamp(target_scores.sum(), min=1.0)
-        pred_sigmoid = torch.sigmoid(pred_logits)
+        base_loss = F.binary_cross_entropy_with_logits(pred_logits, target_scores, reduction="none")
+        return (base_loss * focal_weight).sum() / assigned_scores_sum
 
+    def _compute_varifocal_weight(
+        self, pred_sigmoid: torch.Tensor, target_scores: torch.Tensor, target_labels: torch.Tensor
+    ) -> torch.Tensor:
+        """Compute varifocal weighting.
+
+        Varifocal loss down-weights negative samples with focal term and uses target IoU scores as weights for
+        positive samples.
+        """
         target_labels_onehot = F.one_hot(target_labels, self.num_classes + 1)[..., :-1].float()
 
         focal_weight = (
             self.focal_alpha * pred_sigmoid.pow(self.focal_gamma) * (1.0 - target_labels_onehot)
             + target_scores * target_labels_onehot
         )
+        return focal_weight
 
-        base_loss = F.binary_cross_entropy_with_logits(pred_logits, target_scores, reduction="none")
-        return (base_loss * focal_weight).sum() / assigned_scores_sum
+    def _compute_focal_weight(self, pred_sigmoid: torch.Tensor, target_scores: torch.Tensor) -> torch.Tensor:
+        """Compute standard focal weighting.
 
-    def _focal_loss(self, pred_logits: torch.Tensor, target_scores: torch.Tensor) -> torch.Tensor:
-        """Focal loss."""
-        assigned_scores_sum = torch.clamp(target_scores.sum(), min=1.0)
-        pred_sigmoid = torch.sigmoid(pred_logits)
-
-        base_loss = F.binary_cross_entropy_with_logits(pred_logits, target_scores, reduction="none")
-        focal_weight = (pred_sigmoid - target_scores).pow(self.focal_gamma)
+        Standard focal loss weights based on prediction error magnitude.
+        """
+        focal_weight = (pred_sigmoid - target_scores).abs().pow(self.focal_gamma)
 
         if self.focal_alpha > 0:
             alpha_weight = self.focal_alpha * target_scores + (1 - self.focal_alpha) * (1 - target_scores)
             focal_weight = focal_weight * alpha_weight
 
-        return (base_loss * focal_weight).sum() / assigned_scores_sum
+        return focal_weight
+
+    def _varifocal_loss(
+        self, pred_logits: torch.Tensor, target_scores: torch.Tensor, target_labels: torch.Tensor
+    ) -> torch.Tensor:
+        """Varifocal loss."""
+        pred_sigmoid = torch.sigmoid(pred_logits)
+        focal_weight = self._compute_varifocal_weight(pred_sigmoid, target_scores, target_labels)
+        return self._weighted_focal_loss(pred_logits, target_scores, focal_weight)
+
+    def _focal_loss(self, pred_logits: torch.Tensor, target_scores: torch.Tensor) -> torch.Tensor:
+        """Focal loss."""
+        pred_sigmoid = torch.sigmoid(pred_logits)
+        focal_weight = self._compute_focal_weight(pred_sigmoid, target_scores)
+        return self._weighted_focal_loss(pred_logits, target_scores, focal_weight)
 
     def _box_loss(
         self,
@@ -473,8 +510,7 @@ class RotatedDetectionLoss(nn.Module):
         half_pi = math.pi / 2
         diff = torch.minimum(diff, half_pi - diff)
 
-        # Smooth L1 loss
-        beta = 0.1
-        loss = torch.where(diff < beta, 0.5 * diff.pow(2) / beta, diff - 0.5 * beta)
+        # Smooth L1 loss with configurable beta threshold
+        loss = torch.where(diff < self.angle_beta, 0.5 * diff.pow(2) / self.angle_beta, diff - 0.5 * self.angle_beta)
 
         return loss.mean()
