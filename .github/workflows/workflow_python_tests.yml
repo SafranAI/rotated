@@ -1,5 +1,3 @@
-# Inspired from:
-# https://github.com/operationcanard/finops-reporting/blob/main/.github/workflows/pre-commit-push.yml#L17
 name: Run python tests
 
 on: workflow_call
@@ -9,6 +7,8 @@ jobs:
   python-tests-hooks:
     name: Run python test on repo
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: 📂 Checkout Repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
