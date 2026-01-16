@@ -6,7 +6,7 @@ from typing import Literal
 import torch
 import torch.nn as nn
 
-from rotated.backbones import CSPResNet
+from rotated.backbones import create_csp_resnet
 from rotated.losses.ppyoloer_criterion import LossComponents, RotatedDetectionLoss
 from rotated.nn.custom_pan import CustomCSPPAN
 from rotated.nn.postprocessor import DetectionPostProcessor
@@ -101,6 +101,7 @@ PPYOLOER_CONFIGS = {
 def create_ppyoloer_model(
     num_classes: int = 15,
     size: PPYOLOERSize = "s",
+    pretrained_backbone: bool = True,
     postprocessor: DetectionPostProcessor | None = None,
 ) -> PPYOLOER:
     """Factory function to create a PP-YOLOE-R model with specified size.
@@ -109,6 +110,7 @@ def create_ppyoloer_model(
         num_classes: Number of object classes to detect
         size: Model size - "s" (small), "m" (medium), "l" (large), or "x" (extra large)
             Larger models have better accuracy but require more compute
+        pretrained_backbone: If True, loads pretrained backbone weights from GitHub releases
         postprocessor: Optional postprocessor for inference-time NMS
 
     Returns:
@@ -119,6 +121,8 @@ def create_ppyoloer_model(
 
     Examples:
         >>> model = create_ppyoloer_model(num_classes=15, size="s")
+        >>> # Without pretrained backbone
+        >>> model = create_ppyoloer_model(num_classes=15, size="m", pretrained_backbone=False)
         >>> # With postprocessing for inference
         >>> postprocessor = DetectionPostProcessor(score_threshold=0.01, iou_threshold=0.6)
         >>> model = create_ppyoloer_model(num_classes=20, size="l", postprocessor=postprocessor)
@@ -132,21 +136,11 @@ def create_ppyoloer_model(
             f"Choose 's' for small, 'm' for medium, 'l' for large, or 'x' for extra large."
         )
 
+    # Create backbone with optional pretrained weights
+    backbone = create_csp_resnet(variant=size, pretrained=pretrained_backbone)
+
+    # Create neck
     config = PPYOLOER_CONFIGS[size]
-
-    # Create backbone with size-specific multipliers
-    backbone = CSPResNet(
-        layers=[3, 6, 6, 3],
-        channels=[64, 128, 256, 512, 1024],
-        return_levels=[1, 2, 3],  # Return P3, P4, P5 features
-        use_large_stem=True,
-        act="swish",
-        depth_mult=config["depth_mult"],
-        width_mult=config["width_mult"],
-        use_alpha=True,
-    )
-
-    # Create neck (same configuration for all sizes)
     neck = CustomCSPPAN(
         in_channels=backbone.out_channels,
         out_channels=[192, 384, 768],
@@ -155,6 +149,8 @@ def create_ppyoloer_model(
         act="swish",
         spp=True,
         use_alpha=True,
+        depth_mult=config["depth_mult"],
+        width_mult=config["width_mult"],
     )
 
     # Create criterion
