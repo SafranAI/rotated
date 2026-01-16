@@ -43,7 +43,7 @@ def _load_pretrained_weights(
     Returns:
         State dict with pretrained weights
     """
-    if cache_dir is None:
+    if not cache_dir:
         cache_dir = os.path.join(torch.hub.get_dir(), "checkpoints")
 
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
