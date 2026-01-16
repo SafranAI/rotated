@@ -49,12 +49,7 @@ def _load_pretrained_weights(
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
 
     # Download or load from cache
-    state_dict = torch.hub.load_state_dict_from_url(
-        url,
-        model_dir=cache_dir,
-        progress=progress,
-        map_location="cpu",
-    )
+    state_dict = torch.hub.load_state_dict_from_url(url, model_dir=cache_dir, progress=progress, map_location="cpu")
 
     return state_dict
 
@@ -62,8 +57,9 @@ def _load_pretrained_weights(
 def create_csp_resnet(
     variant: Literal["s", "m", "l", "x"],
     pretrained: bool = False,
+    return_levels: list[int] | None = None,
+    in_chans: int = 3,
     cache_dir: str | None = None,
-    **kwargs,
 ) -> "CSPResNet":
     """Create a CSPResNet backbone with optional pretrained weights.
 
@@ -73,16 +69,14 @@ def create_csp_resnet(
     Args:
         variant: Model variant - 's', 'm', 'l', or 'x'
         pretrained: If True, loads pretrained weights from GitHub releases
+        return_levels: Feature pyramid levels to return. Defaults to [1, 2, 3]
+                       which corresponds to strides [8, 16, 32] (P3, P4, P5)
+        in_chans: Number of input channels. Defaults to 3 (RGB)
         cache_dir: Directory to cache downloaded weights.
                    Defaults to ~/.cache/torch/hub/checkpoints/
-        **kwargs: Additional arguments override defaults
-                  (e.g., return_levels, in_chans, use_checkpoint)
 
     Returns:
         CSPResNet model initialized on CPU
-
-    Raises:
-        ValueError: If variant is not supported or pretrained weights are unavailable
 
     Example:
         >>> from rotated.backbones import create_csp_resnet
@@ -93,7 +87,7 @@ def create_csp_resnet(
         >>> # Create large model without pretrained weights
         >>> model = create_csp_resnet("l", pretrained=False)
         >>>
-        >>> # Create with custom return levels
+        >>> # Create with custom return levels (all 4 levels)
         >>> model = create_csp_resnet("m", pretrained=True, return_levels=[0, 1, 2, 3])
     """
     from rotated.backbones.csp_resnet import CSPResNet
@@ -103,17 +97,20 @@ def create_csp_resnet(
 
     config = CSPRESNET_CONFIGS[variant]
 
+    # Use default return_levels if not specified
+    return_levels = return_levels or [1, 2, 3]
+
     # Build model with default parameters + variant-specific multipliers
     model = CSPResNet(
         layers=[3, 6, 6, 3],
         channels=[64, 128, 256, 512, 1024],
-        return_levels=[1, 2, 3],
+        return_levels=return_levels,
         use_large_stem=True,
         act="swish",
         depth_mult=config["depth_mult"],
         width_mult=config["width_mult"],
         use_alpha=True,
-        **kwargs,  # Allow overrides
+        in_chans=in_chans,
     )
 
     if pretrained:
@@ -125,15 +122,12 @@ def create_csp_resnet(
 
         url = CSPRESNET_PRETRAINED_URLS[variant]
         state_dict = _load_pretrained_weights(url, cache_dir=cache_dir)
-
-        # Load with strict=False to allow parameter overrides
         missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
 
         if missing_keys or unexpected_keys:
             warnings.warn(
-                f"Pretrained weights loaded with mismatches. "
-                f"Missing keys: {len(missing_keys)}, Unexpected keys: {len(unexpected_keys)}. "
-                f"This may be expected if you passed custom parameters (e.g., return_levels, in_chans).",
+                "Pretrained weights loaded with mismatches. "
+                f"Missing keys: {len(missing_keys)}, Unexpected keys: {len(unexpected_keys)}. ",
                 UserWarning,
                 stacklevel=2,
             )

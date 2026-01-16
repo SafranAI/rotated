@@ -101,6 +101,7 @@ PPYOLOER_CONFIGS = {
 def create_ppyoloer_model(
     num_classes: int = 15,
     size: PPYOLOERSize = "s",
+    in_chans: int = 3,
     pretrained_backbone: bool = True,
     postprocessor: DetectionPostProcessor | None = None,
 ) -> PPYOLOER:
@@ -110,6 +111,7 @@ def create_ppyoloer_model(
         num_classes: Number of object classes to detect
         size: Model size - "s" (small), "m" (medium), "l" (large), or "x" (extra large)
             Larger models have better accuracy but require more compute
+        in_chans: Number of input channels
         pretrained_backbone: If True, loads pretrained backbone weights from GitHub releases
         postprocessor: Optional postprocessor for inference-time NMS
 
@@ -137,7 +139,7 @@ def create_ppyoloer_model(
         )
 
     # Create backbone with optional pretrained weights
-    backbone = create_csp_resnet(variant=size, pretrained=pretrained_backbone)
+    backbone = create_csp_resnet(variant=size, in_chans=in_chans, pretrained=pretrained_backbone)
 
     # Create neck
     config = PPYOLOER_CONFIGS[size]
