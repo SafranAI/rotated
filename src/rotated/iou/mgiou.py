@@ -1,8 +1,9 @@
-from rotated.boxes.conversion import obb_to_corners_format
 import torch
-from torch import nn, Tensor
-import torch.nn.functional as F
+from torch import Tensor
+
+from rotated.boxes.conversion import obb_to_corners_format
 from rotated.iou.prob_iou import ProbIoU
+
 
 class MGIoU2D:
     """Marginalized Generalized IoU.
@@ -20,6 +21,7 @@ class MGIoU2D:
         Authors: Duy-Tho Le, Trung Pham, Jianfei Cai, Hamid Rezatofighi
         Paper link: https://arxiv.org/abs/2504.16443
     """
+
     def __init__(self, fast_mode: bool = False, eps: float = 1e-7):
         self.fast_mode = fast_mode
         self.eps = eps
@@ -34,7 +36,7 @@ class MGIoU2D:
         B = pred.size(0)
 
         # detect degenerate GTs → fallback to ProbIoU
-        all_zero = (target.abs().sum(dim=1) == 0)
+        all_zero = target.abs().sum(dim=1) == 0
         iou = pred.new_zeros(B)
         if all_zero.any():
             prob_iou = ProbIoU()
@@ -58,7 +60,6 @@ class MGIoU2D:
         mn1, mx1 = proj1.min(dim=1).values, proj1.max(dim=1).values
         mn2, mx2 = proj2.min(dim=1).values, proj2.max(dim=1).values
 
-
         if self.fast_mode:
             num = torch.minimum(mx1, mx2) - torch.maximum(mn1, mn2)
             den = torch.maximum(mx1, mx2) - torch.minimum(mn1, mn2)
@@ -66,7 +67,7 @@ class MGIoU2D:
         else:
             inter = (torch.minimum(mx1, mx2) - torch.maximum(mn1, mn2)).clamp(min=0.0)
             union = (mx1 - mn1) + (mx2 - mn2) - inter
-            hull  = (torch.maximum(mx1, mx2) - torch.minimum(mn1, mn2))
+            hull = torch.maximum(mx1, mx2) - torch.minimum(mn1, mn2)
             giou1d = inter / (union + self.eps) - (hull - union) / (hull + self.eps)
 
         return giou1d.mean(dim=-1)

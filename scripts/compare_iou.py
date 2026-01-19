@@ -21,9 +21,9 @@ except ImportError:
 
 from rotated.iou.approx_iou import ApproxRotatedIoU
 from rotated.iou.approx_sdf import ApproxSDFL1
+from rotated.iou.mgiou import MGIoU2D
 from rotated.iou.precise_iou import PreciseRotatedIoU
 from rotated.iou.prob_iou import ProbIoU
-from rotated.iou.mgiou import MGIoU2D
 from rotated.utils.seed import seed_everything
 
 
@@ -181,16 +181,23 @@ class IoUComparator:
         - Non-overlapping boxes
         - Boxes at extreme positions
 
+        Args:
+            batch_size: size of the batch
+            num_iterations: number of iterations
+
         Returns:
             Dictionary mapping method names to NaN counts
         """
         nan_counts = {method.name: 0 for method in self.methods}
 
         test_cases = [
-            ("Random boxes", lambda: (
-                torch.rand(batch_size, 5, device=self.device) * 100,
-                torch.rand(batch_size, 5, device=self.device) * 100
-            )),
+            (
+                "Random boxes",
+                lambda: (
+                    torch.rand(batch_size, 5, device=self.device) * 100,
+                    torch.rand(batch_size, 5, device=self.device) * 100,
+                ),
+            ),
             ("Zero width", lambda: self._create_edge_case_boxes(batch_size, width=0.0)),
             ("Zero height", lambda: self._create_edge_case_boxes(batch_size, height=0.0)),
             ("Both zero dimensions", lambda: self._create_edge_case_boxes(batch_size, width=0.0, height=0.0)),
@@ -227,7 +234,7 @@ class IoUComparator:
         y: float = None,
         width: float = None,
         height: float = None,
-        angle: float = None
+        angle: float = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Create boxes with specific edge case values."""
         pred_boxes = torch.rand(batch_size, 5, device=self.device) * 100

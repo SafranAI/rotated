@@ -3,9 +3,9 @@ from typing import Any, Literal, TypeAlias
 
 from rotated.iou.approx_iou import ApproxRotatedIoU
 from rotated.iou.approx_sdf import ApproxSDFL1
+from rotated.iou.mgiou import MGIoU2D
 from rotated.iou.precise_iou import PreciseRotatedIoU
 from rotated.iou.prob_iou import ProbIoU
-from rotated.iou.mgiou import MGIoU2D
 
 __all__ = ["ApproxRotatedIoU", "ApproxSDFL1", "PreciseRotatedIoU", "ProbIoU", "MGIoU2D", "iou_picker"]
 
