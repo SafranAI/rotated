@@ -1,3 +1,4 @@
+from copy import deepcopy
 import math
 
 import pytest
@@ -15,9 +16,11 @@ DEFAULT_CONFIG = {
 }
 
 
-@pytest.fixture
-def criterion() -> RotatedDetectionLoss:
-    return RotatedDetectionLoss(**DEFAULT_CONFIG)
+@pytest.fixture(scope="function", params=["probiou", "mgiou"])
+def criterion(request) -> RotatedDetectionLoss:
+    loss_cfg = deepcopy(DEFAULT_CONFIG)
+    loss_cfg["box_loss_type"] = request.param
+    return RotatedDetectionLoss(**loss_cfg)
 
 
 def test_criterion_perfect_prediction(criterion: RotatedDetectionLoss):
