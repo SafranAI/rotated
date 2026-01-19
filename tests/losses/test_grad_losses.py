@@ -42,7 +42,7 @@ def test_differentiable_loss_identical_boxes(loss_fn, device):
     if isinstance(loss_fn, ProbIoULoss):
         # need to relax constraint for ProbIoULoss
         atol, rtol = 1e-3, 1e-6
-    torch.testing.assert_close(loss, torch.tensor(0.0), atol=atol, rtol=rtol)
+    torch.testing.assert_close(loss, torch.tensor(0.0, device=device), atol=atol, rtol=rtol)
     assert loss.requires_grad, "Loss should require gradients"
 
     loss.backward()
@@ -73,7 +73,7 @@ def test_differentiable_loss_non_overlapping_boxes(loss_fn, device):
     if isinstance(loss_fn, MGIoU2DLoss):
         # max loss value for MGIoU2DLoss is 0.5
         expected_loss = 0.5
-    torch.testing.assert_close(loss, torch.tensor(expected_loss))
+    torch.testing.assert_close(loss, torch.tensor(expected_loss, device=device))
     assert loss.requires_grad, "Loss should require gradients"
 
     loss.backward()
@@ -131,23 +131,24 @@ def test_differentiable_loss_reduction_mean(device, reduction: str):
     assert loss.dim() == 0, "Mean reduction should return scalar"
 
 
-def test_differentiable_loss_reduction_none(device):
+@pytest.mark.parametrize("loss_cls", [MGIoU2DLoss, ProbIoULoss])
+def test_differentiable_loss_reduction_none(loss_cls, device):
     """Test loss without reduction (per-sample losses)."""
-    loss_fn = MGIoU2DLoss(reduction="none").to(device)
+    loss_fn = loss_cls(reduction="none")
 
     pred_boxes = torch.tensor(
         [
             [50.0, 50.0, 30.0, 20.0, 0.0],
-            [100.0, 100.0, 40.0, 40.0, 0.0],
-            [25.0, 25.0, 15.0, 15.0, 0.0],
+            [100.0, 100.0, 40.0, 35.0, 0.0],
+            [25.0, 25.0, 15.0, 20.0, 0.0],
         ],
         device=device,
     )
     target_boxes = torch.tensor(
         [
             [55.0, 50.0, 30.0, 20.0, 0.0],
-            [110.0, 110.0, 40.0, 40.0, 0.0],
-            [30.0, 30.0, 15.0, 15.0, 0.0],
+            [110.0, 110.0, 40.0, 35.0, 0.0],
+            [30.0, 30.0, 15.0, 20.0, 0.0],
         ],
         device=device,
     )
@@ -281,7 +282,7 @@ def test_differentiable_loss_batch_processing(loss_fn, device):
     assert pred_boxes.grad is not None, "Gradients should be computed"
 
 
-def test_differentiable_loss_fast_mode_consistency(device):
+def test_mgiou_loss_fast_mode_consistency(device):
     """Test that fast mode gives similar results to regular mode."""
     loss_fn_regular = MGIoU2DLoss(fast_mode=False).to(device)
     loss_fn_fast = MGIoU2DLoss(fast_mode=True).to(device)
@@ -309,10 +310,11 @@ def test_differentiable_loss_fast_mode_consistency(device):
     torch.testing.assert_close(loss_regular.item(), loss_fast.item())
 
 
-def test_differentiable_loss_eps_parameter(device):
+@pytest.mark.parametrize("loss_cls", [MGIoU2DLoss, ProbIoULoss])
+def test_differentiable_loss_eps_parameter(device, loss_cls):
     """Test that eps parameter prevents division by zero."""
-    loss_fn_small_eps = MGIoU2DLoss(eps=1e-9).to(device)
-    loss_fn_large_eps = MGIoU2DLoss(eps=1e-3).to(device)
+    loss_fn_small_eps = loss_cls(eps=1e-9).to(device)
+    loss_fn_large_eps = loss_cls(eps=1e-3).to(device)
 
     # Create boxes with very small dimensions that might cause numerical issues
     pred_boxes = torch.tensor(
