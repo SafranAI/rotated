@@ -19,6 +19,7 @@ Key Features:
       (direct angle regression) with appropriate loss functions for each.
     - ProbIoU loss: Uses probabilistic IoU for rotated boxes that handles varying uncertainty
       in box predictions.
+    - Optionally, can use MGIoU loss instead of ProbIoU loss. Note: angle loss is then disabled.
 
 Components:
 
@@ -57,6 +58,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from rotated.assigners import RotatedTaskAlignedAssigner
+from rotated.losses.mgiou import MGIoU2DLoss
 from rotated.losses.prob_iou import ProbIoULoss
 
 
@@ -150,6 +152,7 @@ class RotatedDetectionLoss(nn.Module):
         num_classes: Number of object classes
         loss_weights: Weights for each loss component (cls, box, angle, dfl)
         cls_loss_type: Classification loss type ('varifocal', 'focal', or 'bce')
+        box_loss_type: Bounding box loss type ('probiou', 'mgiou')
         assigner_config: Task-aligned assigner configuration (topk, alpha, beta)
         focal_config: Focal loss parameters (alpha, gamma)
         angle_config: Angle loss parameters (beta for smooth L1 threshold when use_angle_bins=False)
@@ -157,6 +160,9 @@ class RotatedDetectionLoss(nn.Module):
         angle_bins: Number of angle bins (only used when use_angle_bins=True)
         use_dfl: If True, use Distribution Focal Loss for bbox regression; if False, use standard regression
         reg_max: Number of DFL bins (only used when use_dfl=True)
+
+    Raises:
+        ValueError: if `box_loss_type` is unknown, ie not "probiou" or "mgiou".
     """
 
     def __init__(
@@ -164,6 +170,7 @@ class RotatedDetectionLoss(nn.Module):
         num_classes: int = 15,
         loss_weights: LossWeights | None = None,
         cls_loss_type: Literal["varifocal", "focal", "bce"] = "varifocal",
+        box_loss_type: Literal["probiou", "mgiou"] = "probiou",
         assigner_config: AssignerConfig | None = None,
         focal_config: FocalConfig | None = None,
         angle_config: AngleConfig | None = None,
@@ -192,7 +199,14 @@ class RotatedDetectionLoss(nn.Module):
         self.angle_scale = math.pi / 2 / angle_bins
 
         self.assigner = RotatedTaskAlignedAssigner(**assigner_config)
-        self.box_loss_fn = ProbIoULoss()
+
+        if box_loss_type not in ["probiou", "mgiou"]:
+            raise ValueError(f"Unknown `bbox_loss_type`: {box_loss_type}")
+        self.box_loss_type = box_loss_type
+        if box_loss_type == "mgiou":
+            self.box_loss_fn = MGIoU2DLoss()
+        else:
+            self.box_loss_fn = ProbIoULoss()
 
     def _sync_config(self, use_dfl: bool, reg_max: int, use_angle_bins: bool) -> None:
         """Sync configuration from head."""
@@ -245,7 +259,10 @@ class RotatedDetectionLoss(nn.Module):
         loss_cls = self._classification_loss(cls_logits, assigned_scores, assigned_labels)
         loss_box = self._box_loss(decoded_boxes, assigned_boxes, assigned_labels, assigned_scores, stride_tensor)
 
-        if self.use_angle_bins:
+        if self.box_loss_type == "mgiou":
+            # no loss_angle needed for MGIoU
+            loss_angle = torch.tensor(0.0, device=cls_logits.device)
+        elif self.use_angle_bins:
             loss_angle = self._angle_loss_binned(raw_angles, assigned_boxes, assigned_labels)
         else:
             loss_angle = self._angle_loss_continuous(raw_angles, assigned_boxes, assigned_labels)
