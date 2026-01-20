@@ -1,4 +1,5 @@
 import math
+from typing import TypeAlias
 
 import pytest
 import torch
@@ -8,22 +9,25 @@ from rotated.losses.prob_iou import ProbIoULoss
 
 
 @pytest.fixture
-def device():
+def device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+LossCls: TypeAlias = ProbIoULoss | MGIoU2DLoss
+
+
 @pytest.fixture(scope="function", params=[ProbIoULoss, MGIoU2DLoss])
-def loss_fn(device, request):
+def loss_fn(device: torch.device, request) -> LossCls:
     loss_cls = request.param
     return loss_cls().to(device)
 
 
 @pytest.fixture
-def loss_fn_fast(device):
+def loss_fn_fast(device) -> MGIoU2DLoss:
     return MGIoU2DLoss(fast_mode=True).to(device)
 
 
-def test_differentiable_loss_identical_boxes(loss_fn, device):
+def test_differentiable_loss_identical_boxes(loss_fn: LossCls, device: torch.device):
     """Test loss with identical boxes (should give loss ≈ 0)."""
     pred_boxes = torch.tensor(
         [
@@ -49,7 +53,7 @@ def test_differentiable_loss_identical_boxes(loss_fn, device):
     assert pred_boxes.grad is not None, "Gradients should be computed"
 
 
-def test_differentiable_loss_non_overlapping_boxes(loss_fn, device):
+def test_differentiable_loss_non_overlapping_boxes(loss_fn: LossCls, device: torch.device):
     """Test loss with non-overlapping boxes (should give loss ≈ 0.5)."""
     pred_boxes = torch.tensor(
         [
@@ -80,7 +84,7 @@ def test_differentiable_loss_non_overlapping_boxes(loss_fn, device):
     assert pred_boxes.grad is not None, "Gradients should be computed"
 
 
-def test_differentiable_loss_partial_overlap(loss_fn, device):
+def test_differentiable_loss_partial_overlap(loss_fn: LossCls, device: torch.device):
     """Test loss with partially overlapping boxes."""
     pred_boxes = torch.tensor(
         [
@@ -108,7 +112,7 @@ def test_differentiable_loss_partial_overlap(loss_fn, device):
 
 
 @pytest.mark.parametrize("reduction", ["mean", "sum"])
-def test_differentiable_loss_reduction_mean(device, reduction: str):
+def test_differentiable_loss_reduction_mean(device: torch.device, reduction: str):
     """Test loss with mean reduction."""
     loss_fn = MGIoU2DLoss(reduction=reduction).to(device)
 
@@ -132,7 +136,7 @@ def test_differentiable_loss_reduction_mean(device, reduction: str):
 
 
 @pytest.mark.parametrize("loss_cls", [MGIoU2DLoss, ProbIoULoss])
-def test_differentiable_loss_reduction_none(loss_cls, device):
+def test_differentiable_loss_reduction_none(loss_cls, device: torch.device):
     """Test loss without reduction (per-sample losses)."""
     loss_fn = loss_cls(reduction="none")
 
@@ -159,7 +163,7 @@ def test_differentiable_loss_reduction_none(loss_cls, device):
     assert loss.max() <= 1.0
 
 
-def test_differentiable_loss_rotated_boxes(loss_fn, device):
+def test_differentiable_loss_rotated_boxes(loss_fn: LossCls, device: torch.device):
     """Test loss with various rotations."""
     pred_boxes = torch.tensor(
         [
@@ -190,7 +194,7 @@ def test_differentiable_loss_rotated_boxes(loss_fn, device):
     assert pred_boxes.grad is not None, "Gradients should be computed"
 
 
-def test_differentiable_loss_zero_dimensions(loss_fn, device):
+def test_differentiable_loss_zero_dimensions(loss_fn: LossCls, device: torch.device):
     """Test loss with degenerate boxes (zero dimensions)."""
     pred_boxes = torch.tensor(
         [
@@ -213,7 +217,7 @@ def test_differentiable_loss_zero_dimensions(loss_fn, device):
     assert 0.0 < loss.item() <= 1.0
 
 
-def test_differentiable_loss_all_zero_target(loss_fn, device):
+def test_differentiable_loss_all_zero_target(loss_fn: LossCls, device: torch.device):
     """Test loss when target has all zeros (fallback to ProbIoU)."""
     pred_boxes = torch.tensor(
         [
@@ -236,7 +240,7 @@ def test_differentiable_loss_all_zero_target(loss_fn, device):
     assert 0.0 < loss.item() <= 1.0, "Loss should be non-negative"
 
 
-def test_differentiable_loss_single_box(loss_fn, device):
+def test_differentiable_loss_single_box(loss_fn: LossCls, device: torch.device):
     """Test loss with a single box pair."""
     pred_boxes = torch.tensor(
         [[50.0, 50.0, 30.0, 20.0, math.pi / 6]],
@@ -258,7 +262,7 @@ def test_differentiable_loss_single_box(loss_fn, device):
     assert pred_boxes.grad.shape == pred_boxes.shape, "Gradient shape should match input"
 
 
-def test_differentiable_loss_batch_processing(loss_fn, device):
+def test_differentiable_loss_batch_processing(loss_fn: LossCls, device: torch.device):
     """Test loss with larger batch to verify batch processing."""
     batch_size = 100
     pred_boxes = torch.rand(batch_size, 5, device=device)
@@ -282,7 +286,7 @@ def test_differentiable_loss_batch_processing(loss_fn, device):
     assert pred_boxes.grad is not None, "Gradients should be computed"
 
 
-def test_mgiou_loss_fast_mode_consistency(device):
+def test_mgiou_loss_fast_mode_consistency(device: torch.device):
     """Test that fast mode gives similar results to regular mode."""
     loss_fn_regular = MGIoU2DLoss(fast_mode=False).to(device)
     loss_fn_fast = MGIoU2DLoss(fast_mode=True).to(device)
@@ -311,7 +315,7 @@ def test_mgiou_loss_fast_mode_consistency(device):
 
 
 @pytest.mark.parametrize("loss_cls", [MGIoU2DLoss, ProbIoULoss])
-def test_differentiable_loss_eps_parameter(device, loss_cls):
+def test_differentiable_loss_eps_parameter(device: torch.device, loss_cls: LossCls):
     """Test that eps parameter prevents division by zero."""
     loss_fn_small_eps = loss_cls(eps=1e-9).to(device)
     loss_fn_large_eps = loss_cls(eps=1e-3).to(device)
@@ -333,7 +337,7 @@ def test_differentiable_loss_eps_parameter(device, loss_cls):
     assert not torch.isnan(loss_large), "Loss should not be NaN with large eps"
 
 
-def test_differentiable_loss_gradient_magnitude(loss_fn, device):
+def test_differentiable_loss_gradient_magnitude(loss_fn: LossCls, device: torch.device):
     """Test that gradients have reasonable magnitude."""
     pred_boxes = torch.tensor(
         [
@@ -360,7 +364,7 @@ def test_differentiable_loss_gradient_magnitude(loss_fn, device):
     assert not torch.isnan(pred_boxes.grad).any(), "Gradients should not contain NaN"
 
 
-def test_differentiable_loss_different_sizes(loss_fn, device):
+def test_differentiable_loss_different_sizes(loss_fn: LossCls, device: torch.device):
     """Test loss with boxes of very different sizes."""
     pred_boxes = torch.tensor(
         [
@@ -387,7 +391,7 @@ def test_differentiable_loss_different_sizes(loss_fn, device):
     assert pred_boxes.grad is not None, "Gradients should be computed"
 
 
-def test_differentiable_loss_extreme_rotations(loss_fn, device):
+def test_differentiable_loss_extreme_rotations(loss_fn: LossCls, device: torch.device):
     """Test loss with extreme rotation values."""
     pred_boxes = torch.tensor(
         [
@@ -414,7 +418,7 @@ def test_differentiable_loss_extreme_rotations(loss_fn, device):
     assert not torch.isnan(pred_boxes.grad).any(), "Gradients should not contain NaN"
 
 
-def test_differentiable_loss_square_boxes(loss_fn, device):
+def test_differentiable_loss_square_boxes(loss_fn: LossCls, device: torch.device):
     """Test loss with square boxes (equal width and height)."""
     pred_boxes = torch.tensor(
         [
