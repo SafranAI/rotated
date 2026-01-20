@@ -193,29 +193,45 @@ class IoUComparator:
         test_cases = [
             (
                 "Random boxes",
-                lambda: (
-                    torch.rand(batch_size, 5, device=self.device) * 100,
-                    torch.rand(batch_size, 5, device=self.device) * 100,
+                lambda gen: (
+                    torch.rand(batch_size, 5, device=self.device, generator=gen) * 100,
+                    torch.rand(batch_size, 5, device=self.device, generator=gen) * 100,
                 ),
             ),
-            ("Zero width", lambda: self._create_edge_case_boxes(batch_size, width=0.0)),
-            ("Zero height", lambda: self._create_edge_case_boxes(batch_size, height=0.0)),
-            ("Both zero dimensions", lambda: self._create_edge_case_boxes(batch_size, width=0.0, height=0.0)),
-            ("Very small dimensions", lambda: self._create_edge_case_boxes(batch_size, width=1e-6, height=1e-6)),
-            ("Very large dimensions", lambda: self._create_edge_case_boxes(batch_size, width=1e6, height=1e6)),
-            ("Negative width", lambda: self._create_edge_case_boxes(batch_size, width=-10.0)),
-            ("Negative height", lambda: self._create_edge_case_boxes(batch_size, height=-10.0)),
-            ("Extreme positive rotation", lambda: self._create_edge_case_boxes(batch_size, angle=1e6)),
-            ("Extreme negative rotation", lambda: self._create_edge_case_boxes(batch_size, angle=-1e6)),
-            ("Identical boxes", lambda: self._create_identical_boxes(batch_size)),
-            ("Non-overlapping boxes", lambda: self._create_non_overlapping_boxes(batch_size)),
-            ("Extreme positions", lambda: self._create_edge_case_boxes(batch_size, x=1e8, y=1e8)),
+            ("Zero width", lambda gen: self._create_edge_case_boxes(batch_size, width=0.0, generator=gen)),
+            ("Zero height", lambda gen: self._create_edge_case_boxes(batch_size, height=0.0, generator=gen)),
+            (
+                "Both zero dimensions",
+                lambda gen: self._create_edge_case_boxes(batch_size, width=0.0, height=0.0, generator=gen),
+            ),
+            (
+                "Very small dimensions",
+                lambda gen: self._create_edge_case_boxes(batch_size, width=1e-6, height=1e-6, generator=gen),
+            ),
+            (
+                "Very large dimensions",
+                lambda gen: self._create_edge_case_boxes(batch_size, width=1e6, height=1e6, generator=gen),
+            ),
+            ("Negative width", lambda gen: self._create_edge_case_boxes(batch_size, width=-10.0, generator=gen)),
+            ("Negative height", lambda gen: self._create_edge_case_boxes(batch_size, height=-10.0, generator=gen)),
+            (
+                "Extreme positive rotation",
+                lambda gen: self._create_edge_case_boxes(batch_size, angle=1e6, generator=gen),
+            ),
+            (
+                "Extreme negative rotation",
+                lambda gen: self._create_edge_case_boxes(batch_size, angle=-1e6, generator=gen),
+            ),
+            ("Identical boxes", lambda gen: self._create_identical_boxes(batch_size, generator=gen)),
+            ("Non-overlapping boxes", lambda gen: self._create_non_overlapping_boxes(batch_size, generator=gen)),
+            ("Extreme positions", lambda gen: self._create_edge_case_boxes(batch_size, x=1e8, y=1e8, generator=gen)),
         ]
 
         for method in self.methods:
             for case_name, create_boxes in test_cases:
-                for _ in range(num_iterations):
-                    pred_boxes, target_boxes = create_boxes()
+                for i in range(num_iterations):
+                    generator = torch.Generator(device=self.device).manual_seed(i)
+                    pred_boxes, target_boxes = create_boxes(generator)
                     test_pred, test_target = self._prepare_tensors(pred_boxes, target_boxes, method.force_cpu)
 
                     with torch.no_grad():
@@ -230,15 +246,18 @@ class IoUComparator:
     def _create_edge_case_boxes(
         self,
         batch_size: int,
-        x: float = None,
-        y: float = None,
-        width: float = None,
-        height: float = None,
-        angle: float = None,
+        x: float | None = None,
+        y: float | None = None,
+        width: float | None = None,
+        height: float | None = None,
+        angle: float | None = None,
+        generator: torch.Generator | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Create boxes with specific edge case values."""
-        pred_boxes = torch.rand(batch_size, 5, device=self.device) * 100
-        target_boxes = torch.rand(batch_size, 5, device=self.device) * 100
+        if generator is None:
+            generator = torch.Generator(self.device)
+        pred_boxes = torch.rand(batch_size, 5, device=self.device, generator=generator) * 100
+        target_boxes = torch.rand(batch_size, 5, device=self.device, generator=generator) * 100
 
         if x is not None:
             pred_boxes[:, 0] = x
@@ -253,15 +272,17 @@ class IoUComparator:
 
         return pred_boxes, target_boxes
 
-    def _create_identical_boxes(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def _create_identical_boxes(self, batch_size: int, generator: torch.Generator) -> tuple[torch.Tensor, torch.Tensor]:
         """Create pairs of identical boxes."""
-        boxes = torch.rand(batch_size, 5, device=self.device) * 100
+        boxes = torch.rand(batch_size, 5, device=self.device, generator=generator) * 100
         return boxes.clone(), boxes.clone()
 
-    def _create_non_overlapping_boxes(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def _create_non_overlapping_boxes(
+        self, batch_size: int, generator: torch.Generator
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Create pairs of boxes that are guaranteed not to overlap."""
-        pred_boxes = torch.rand(batch_size, 5, device=self.device) * 100
-        target_boxes = torch.rand(batch_size, 5, device=self.device) * 100
+        pred_boxes = torch.rand(batch_size, 5, device=self.device, generator=generator) * 100
+        target_boxes = torch.rand(batch_size, 5, device=self.device, generator=generator) * 100
         # Move target boxes far away to ensure no overlap
         target_boxes[:, 0] += 1000
         target_boxes[:, 1] += 1000
