@@ -10,8 +10,9 @@ from rotated.boxes.utils import check_aabb_overlap
 
 
 class ApproxSDFL1:
-    def __init__(self, n_samples: int = 40):
+    def __init__(self, n_samples: int = 40, eps: float = 1e-7):
         self.n_samples = n_samples
+        self.eps = eps
 
     def __call__(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
         N = pred_boxes.shape[0]
@@ -38,8 +39,8 @@ class ApproxSDFL1:
 
         a_extra = _saf_obox2obox_vec(pred_candidates, target_candidates, n_samples=self.n_samples)
         union = target_area + a_extra
-        ious[candidates] = (pred_area + target_area) / union - 1
-        return ious
+        ious[candidates] = (pred_area + target_area) / (union + self.eps) - 1
+        return ious.clamp(0.0, 1.0)
 
 
 def _saf_obox2obox_vec(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, n_samples: int = 40) -> torch.Tensor:
@@ -100,7 +101,7 @@ def _pairwise_saf_obox2obox(pred_boxes: torch.Tensor, target_boxes: torch.Tensor
     """
 
     # from (xc, yc, w, h, angle) -> (x1,y1, x2,y2, x3,y3, x4,y4)
-    poly = obb_to_corners_format(pred_boxes, degrees=False, flatten=False)
+    poly = obb_to_corners_format(pred_boxes, degrees=False)
     factors2 = torch.arange(n_samples, device=pred_boxes.device, dtype=pred_boxes.dtype) / n_samples
     factors1 = 1.0 - factors2
 
