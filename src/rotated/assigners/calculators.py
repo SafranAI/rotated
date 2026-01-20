@@ -1,4 +1,5 @@
 from typing import TYPE_CHECKING
+import warnings
 
 import torch
 
@@ -15,6 +16,9 @@ class RotatedIoUCalculator:
         iou_method: Method name to compute Intersection Over Union
         iou_kwargs: Dictionary with parameters for the IoU method
         min_box_size: Minimum valid box dimension (width or height). Boxes smaller than this are invalid.
+
+    Raises:
+        ValueError: if non-differentiable IoU function is used as `iou_calculator`
     """
 
     def __init__(
@@ -24,6 +28,15 @@ class RotatedIoUCalculator:
         min_box_size: float = 1e-2,
     ):
         from rotated.iou import iou_picker
+
+        if iou_method in ["approx_sdf_l1", "precise_rotated_iou", "approx_rotated_iou"]:
+            raise ValueError(f"Method {iou_method} not supported by RotatedIoUCalculator")
+        if iou_method == "mgiou":
+            warnings.warn(
+                f"{iou_method} is ill suited for TaskAlignedAssigner. It is recommended to use 'prob_iou' instead",
+                UserWarning,
+                stacklevel=2,
+            )
 
         self.iou_calculator = iou_picker(iou_method=iou_method, iou_kwargs=iou_kwargs)
         self.min_box_size = min_box_size

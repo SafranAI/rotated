@@ -3,10 +3,11 @@ from typing import Any, Literal, TypeAlias
 
 from rotated.iou.approx_iou import ApproxRotatedIoU
 from rotated.iou.approx_sdf import ApproxSDFL1
+from rotated.iou.mgiou import MGIoU2D
 from rotated.iou.precise_iou import PreciseRotatedIoU
 from rotated.iou.prob_iou import ProbIoU
 
-__all__ = ["ApproxRotatedIoU", "ApproxSDFL1", "PreciseRotatedIoU", "ProbIoU", "iou_picker"]
+__all__ = ["ApproxRotatedIoU", "ApproxSDFL1", "PreciseRotatedIoU", "ProbIoU", "MGIoU2D", "iou_picker"]
 
 
 _IOU_METHODS = {
@@ -14,10 +15,11 @@ _IOU_METHODS = {
     "precise_rotated_iou": PreciseRotatedIoU,
     "prob_iou": ProbIoU,
     "approx_rotated_iou": ApproxRotatedIoU,
+    "mgiou": MGIoU2D,
 }
 
-IoUMethod: TypeAlias = ApproxRotatedIoU | ApproxSDFL1 | PreciseRotatedIoU | ProbIoU
-IoUMethodName: TypeAlias = Literal["approx_rotated_iou", "approx_sdf_l1", "precise_rotated_iou", "prob_iou"]
+IoUMethod: TypeAlias = ApproxRotatedIoU | ApproxSDFL1 | PreciseRotatedIoU | ProbIoU | MGIoU2D
+IoUMethodName: TypeAlias = Literal["approx_rotated_iou", "approx_sdf_l1", "precise_rotated_iou", "prob_iou", "mgiou"]
 IoUKwargs: TypeAlias = dict[str, Any] | None
 
 

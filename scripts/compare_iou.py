@@ -21,6 +21,7 @@ except ImportError:
 
 from rotated.iou.approx_iou import ApproxRotatedIoU
 from rotated.iou.approx_sdf import ApproxSDFL1
+from rotated.iou.mgiou import MGIoU2D
 from rotated.iou.precise_iou import PreciseRotatedIoU
 from rotated.iou.prob_iou import ProbIoU
 from rotated.utils.seed import seed_everything
@@ -41,6 +42,7 @@ IOU_METHODS = [
     IoUMethod("Approximation", ApproxRotatedIoU()),
     IoUMethod("Precise", PreciseRotatedIoU()),
     IoUMethod("SDF-L1", ApproxSDFL1()),
+    IoUMethod("MGIoU", MGIoU2D(), supports_gradients=True),
     # Add your custom methods here, e.g.:
     # IoUMethod("MyCustomIoU", MyCustomIoU(), supports_gradients=True),
 ]
@@ -164,6 +166,127 @@ class IoUComparator:
             timings[method.name] = (time.perf_counter() - start) / num_iterations * 1000
 
         return timings
+
+    def check_for_nans(self, batch_size: int = 1000, num_iterations: int = 10) -> dict[str, int]:
+        """Check if methods return NaN values for various edge cases.
+
+        Tests include:
+        - Random boxes
+        - Zero-width/height boxes
+        - Very small dimensions (near-degenerate)
+        - Very large dimensions
+        - Extreme rotations
+        - Negative dimensions
+        - Identical boxes
+        - Non-overlapping boxes
+        - Boxes at extreme positions
+
+        Args:
+            batch_size: size of the batch
+            num_iterations: number of iterations
+
+        Returns:
+            Dictionary mapping method names to NaN counts
+        """
+        nan_counts = {method.name: 0 for method in self.methods}
+
+        test_cases = [
+            (
+                "Random boxes",
+                lambda gen: (
+                    torch.rand(batch_size, 5, device=self.device, generator=gen) * 100,
+                    torch.rand(batch_size, 5, device=self.device, generator=gen) * 100,
+                ),
+            ),
+            ("Zero width", lambda gen: self._create_edge_case_boxes(batch_size, width=0.0, generator=gen)),
+            ("Zero height", lambda gen: self._create_edge_case_boxes(batch_size, height=0.0, generator=gen)),
+            (
+                "Both zero dimensions",
+                lambda gen: self._create_edge_case_boxes(batch_size, width=0.0, height=0.0, generator=gen),
+            ),
+            (
+                "Very small dimensions",
+                lambda gen: self._create_edge_case_boxes(batch_size, width=1e-6, height=1e-6, generator=gen),
+            ),
+            (
+                "Very large dimensions",
+                lambda gen: self._create_edge_case_boxes(batch_size, width=1e6, height=1e6, generator=gen),
+            ),
+            ("Negative width", lambda gen: self._create_edge_case_boxes(batch_size, width=-10.0, generator=gen)),
+            ("Negative height", lambda gen: self._create_edge_case_boxes(batch_size, height=-10.0, generator=gen)),
+            (
+                "Extreme positive rotation",
+                lambda gen: self._create_edge_case_boxes(batch_size, angle=1e6, generator=gen),
+            ),
+            (
+                "Extreme negative rotation",
+                lambda gen: self._create_edge_case_boxes(batch_size, angle=-1e6, generator=gen),
+            ),
+            ("Identical boxes", lambda gen: self._create_identical_boxes(batch_size, generator=gen)),
+            ("Non-overlapping boxes", lambda gen: self._create_non_overlapping_boxes(batch_size, generator=gen)),
+            ("Extreme positions", lambda gen: self._create_edge_case_boxes(batch_size, x=1e8, y=1e8, generator=gen)),
+        ]
+
+        for method in self.methods:
+            for case_name, create_boxes in test_cases:
+                for i in range(num_iterations):
+                    generator = torch.Generator(device=self.device).manual_seed(i)
+                    pred_boxes, target_boxes = create_boxes(generator)
+                    test_pred, test_target = self._prepare_tensors(pred_boxes, target_boxes, method.force_cpu)
+
+                    with torch.no_grad():
+                        ious = method.calculator(test_pred, test_target)
+                        nan_count = ious.isnan().sum().item()
+                        if nan_count > 0:
+                            nan_counts[method.name] += nan_count
+                            print(f"{method.name}: {nan_count} NaN values in '{case_name}'")
+
+        return nan_counts
+
+    def _create_edge_case_boxes(
+        self,
+        batch_size: int,
+        x: float | None = None,
+        y: float | None = None,
+        width: float | None = None,
+        height: float | None = None,
+        angle: float | None = None,
+        generator: torch.Generator | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Create boxes with specific edge case values."""
+        if generator is None:
+            generator = torch.Generator(self.device)
+        pred_boxes = torch.rand(batch_size, 5, device=self.device, generator=generator) * 100
+        target_boxes = torch.rand(batch_size, 5, device=self.device, generator=generator) * 100
+
+        if x is not None:
+            pred_boxes[:, 0] = x
+        if y is not None:
+            pred_boxes[:, 1] = y
+        if width is not None:
+            pred_boxes[:, 2] = width
+        if height is not None:
+            pred_boxes[:, 3] = height
+        if angle is not None:
+            pred_boxes[:, 4] = angle
+
+        return pred_boxes, target_boxes
+
+    def _create_identical_boxes(self, batch_size: int, generator: torch.Generator) -> tuple[torch.Tensor, torch.Tensor]:
+        """Create pairs of identical boxes."""
+        boxes = torch.rand(batch_size, 5, device=self.device, generator=generator) * 100
+        return boxes.clone(), boxes.clone()
+
+    def _create_non_overlapping_boxes(
+        self, batch_size: int, generator: torch.Generator
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Create pairs of boxes that are guaranteed not to overlap."""
+        pred_boxes = torch.rand(batch_size, 5, device=self.device, generator=generator) * 100
+        target_boxes = torch.rand(batch_size, 5, device=self.device, generator=generator) * 100
+        # Move target boxes far away to ensure no overlap
+        target_boxes[:, 0] += 1000
+        target_boxes[:, 1] += 1000
+        return pred_boxes, target_boxes
 
     def compare_accuracy(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> dict[str, float]:
         """Compare accuracy against the configured reference method."""
@@ -301,6 +424,17 @@ def main():
             print(f"Note: {', '.join(non_diff)} are not differentiable")
     else:
         print("No methods support gradients")
+
+    # Test 5: checking for NaNs
+    print("\n--- NaN Test ---")
+    nan_counts = comparator.check_for_nans()
+    if any(count > 0 for count in nan_counts.values()):
+        print("\nSummary of NaN occurrences:")
+        for method_name, count in nan_counts.items():
+            if count > 0:
+                print(f"  {method_name:20s}: {count} total NaN values")
+    else:
+        print("All methods passed: No NaN values detected")
 
     print("\nAll tests completed!")
 
