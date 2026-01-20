@@ -19,7 +19,8 @@ Key Features:
       (direct angle regression) with appropriate loss functions for each.
     - ProbIoU loss: Uses probabilistic IoU for rotated boxes that handles varying uncertainty
       in box predictions.
-    - Optionally, can use MGIoU loss instead of ProbIoU loss. Note: angle loss is then disabled.
+    - Optionally, can use MGIoU loss instead of ProbIoU loss. Note: angle loss is then disabled,
+        because it is not needed.
 
 Components:
 

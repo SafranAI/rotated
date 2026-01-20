@@ -15,22 +15,28 @@ class MGIoU2D:
     This provides differentiable IoU computation with better gradient flow compared to discrete polygon IoU,
     and better latency compared to KFIoU, GWD and KLD.
 
+    NOTE: It is not meant to be used as a replacement/approximation of the real IoU, but rather as a loss function,
+    see `MGIoU2DLoss`. Hence, we dont recommend using it as `iou_calculator` in `TaskAlignedAssigner`.
+
+    NOTE: For degenerated boxes, we fallback to ProbIoU.
+
     Reference:
         Title: Marginalized Generalized IoU (MGIoU): A Unified Objective Function for Optimizing
                Any Convex Parametric Shapes.
         Authors: Duy-Tho Le, Trung Pham, Jianfei Cai, Hamid Rezatofighi
         Paper link: https://arxiv.org/abs/2504.16443
+        Website: https://ldtho.github.io/MGIoU/
+
+    Args:
+        fast_mode: if True, will approximate GIoU1D (skipping convex hull computation)
+        eps: Small constant for numerical stability
     """
 
     def __init__(self, fast_mode: bool = False, eps: float = 1e-7):
         self.fast_mode = fast_mode
         self.eps = eps
 
-    def __call__(
-        self,
-        pred: Tensor,
-        target: Tensor,
-    ) -> Tensor:
+    def __call__(self, pred: Tensor, target: Tensor) -> Tensor:
         if pred.shape != target.shape or pred.shape[-1] != 5:
             raise ValueError("Expected boxes of shape (B, 5)")
         B = pred.size(0)
