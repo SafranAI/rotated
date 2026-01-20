@@ -139,6 +139,8 @@ class RotatedDetectionLoss(nn.Module):
     Supports two bounding box regression modes:
 
     - Standard mode (use_dfl=False): Direct regression of box parameters with IoU-based loss.
+        2 IoU-based losses are available: `ProbIoULoss` and `MGIoU2DLoss`. When `MGIoU2DLoss` is
+        used, the angle loss is disabled (as recommended in the paper).
     - DFL mode (use_dfl=True): Distribution Focal Loss that models box coordinates as
       distributions over discrete bins, providing finer-grained localization.
 
@@ -153,7 +155,7 @@ class RotatedDetectionLoss(nn.Module):
         num_classes: Number of object classes
         loss_weights: Weights for each loss component (cls, box, angle, dfl)
         cls_loss_type: Classification loss type ('varifocal', 'focal', or 'bce')
-        box_loss_type: Bounding box loss type ('probiou', 'mgiou')
+        box_loss_type: Bounding box loss type ('probiou', 'mgiou'). If 'mgiou', angle loss is disabled.
         assigner_config: Task-aligned assigner configuration (topk, alpha, beta)
         focal_config: Focal loss parameters (alpha, gamma)
         angle_config: Angle loss parameters (beta for smooth L1 threshold when use_angle_bins=False)
