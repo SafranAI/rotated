@@ -2,12 +2,20 @@ import inspect
 from typing import Any, Literal, TypeAlias
 
 from rotated.iou.approx_iou import ApproxRotatedIoU
-from rotated.iou.approx_sdf import ApproxSDFL1
+from rotated.iou.approx_sdf import ApproxSDFL1, compute_rotated_iou_approx_sdf
 from rotated.iou.mgiou import MGIoU2D
 from rotated.iou.precise_iou import PreciseRotatedIoU
 from rotated.iou.prob_iou import ProbIoU
 
-__all__ = ["ApproxRotatedIoU", "ApproxSDFL1", "PreciseRotatedIoU", "ProbIoU", "MGIoU2D", "iou_picker"]
+__all__ = [
+    "ApproxRotatedIoU",
+    "ApproxSDFL1",
+    "MGIoU2D",
+    "PreciseRotatedIoU",
+    "ProbIoU",
+    "compute_rotated_iou_approx_sdf",
+    "iou_picker",
+]
 
 
 _IOU_METHODS = {
