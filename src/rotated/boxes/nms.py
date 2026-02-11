@@ -370,7 +370,8 @@ def _multiclass_nms_vanilla(
         return torch.empty((0,), dtype=torch.int64, device=boxes.device)
 
     unique_labels = torch.unique(labels)
-    all_keep_indices = []
+    keep_indices = torch.empty(boxes.size(0), dtype=torch.int64, device=boxes.device)
+    total_valid = 0
 
     for label in unique_labels:
         class_mask = labels == label
@@ -392,14 +393,16 @@ def _multiclass_nms_vanilla(
 
         if class_keep.size(0) > 0:
             original_indices = class_indices[class_keep]
-            all_keep_indices.append(original_indices)
+            n_valid_indices = original_indices.size(0)
+            keep_indices[total_valid : total_valid + n_valid_indices] = original_indices
+            total_valid += n_valid_indices
 
-    if len(all_keep_indices) == 0:
+    if total_valid == 0:
         return torch.empty((0,), dtype=torch.int64, device=boxes.device)
 
-    keep_indices = torch.cat(all_keep_indices)
-
-    _, sort_order = scores[keep_indices].sort(descending=True)
+    # Return only the valid indices
+    valid_keep_indices = keep_indices[:total_valid]
+    _, sort_order = scores[valid_keep_indices].sort(descending=True)
     return keep_indices[sort_order]
 
 
