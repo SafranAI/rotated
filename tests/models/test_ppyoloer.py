@@ -1,5 +1,8 @@
 from functools import partial
+import importlib
 import math
+import os
+import tempfile
 import warnings
 
 import pytest
@@ -10,6 +13,7 @@ from rotated.backbones import CSPResNet
 from rotated.losses.ppyoloer_criterion import LossComponents
 from rotated.models.ppyoloer import PPYOLOER, create_ppyoloer_model
 from rotated.nn.custom_pan import CustomCSPPAN
+from rotated.nn.postprocessor import DetectionPostProcessor
 from rotated.nn.ppyoloer_head import PPYOLOERHead
 
 _create_ppyoloer_model = partial(create_ppyoloer_model, pretrained_backbone=False)
@@ -268,17 +272,17 @@ def test_torchscript_tracing():
     # 2. Constant losses during inference
     warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
 
-    model = _create_ppyoloer_model(num_classes=15)
+    model = _create_ppyoloer_model(num_classes=15, postprocessor=DetectionPostProcessor())
     model.eval()
     model.export()
 
     # Trace with batch_size=1
-    dummy_input = torch.randn(1, 3, 640, 640)
+    dummy_input = torch.randn(1, 3, 256, 256)
     traced_model = torch.jit.trace(model, dummy_input)
 
     # Test with different batch sizes
     for batch_size in [1, 2, 4]:
-        test_input = torch.randn(batch_size, 3, 640, 640)
+        test_input = torch.randn(batch_size, 3, 256, 256)
 
         with torch.no_grad():
             # Original model
@@ -295,5 +299,83 @@ def test_torchscript_tracing():
         assert boxes_orig.shape[0] == batch_size
         assert scores_orig.shape[0] == batch_size
         assert labels_orig.shape[0] == batch_size
+
+    warnings.resetwarnings()
+
+
+@pytest.mark.skipif(
+    not (importlib.util.find_spec("onnx") and importlib.util.find_spec("onnxruntime")), reason="ONNX is not installed"
+)
+def test_onnx_export():
+    """Test ONNX export functionality."""
+    import onnxruntime as ort
+
+    # Suppress specific warnings about ONNX export
+    warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
+
+    model = _create_ppyoloer_model(num_classes=15, postprocessor=DetectionPostProcessor())
+    model.eval()
+    model.export()
+
+    # Create a temporary file for ONNX export
+    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp_file:
+        onnx_path = tmp_file.name
+
+    try:
+        # Export to ONNX using legacy TorchScript exporter because postprocessor is not
+        # compatible with dynamo=True
+        dummy_input = torch.randn(1, 3, 256, 256)
+        torch.onnx.export(
+            model,
+            dummy_input,
+            onnx_path,
+            input_names=["input"],
+            output_names=["losses", "boxes", "scores", "labels"],
+            dynamic_axes={
+                "input": {0: "batch_size"},
+                "boxes": {0: "batch_size"},
+                "scores": {0: "batch_size"},
+                "labels": {0: "batch_size"},
+            },
+            dynamo=False,  # Use legacy TorchScript exporter
+            fallback=True,  # Allow fallback for unsupported operations
+        )
+
+        # Verify the ONNX file was created and has content
+        assert os.path.exists(onnx_path), "ONNX file was not created"
+        assert os.path.getsize(onnx_path) > 0, "ONNX file is empty"
+
+        # Create ONNX runtime session
+        sess = ort.InferenceSession(onnx_path)
+
+        # Test with different batch sizes
+        for batch_size in [1, 2]:
+            test_input = torch.randn(batch_size, 3, 256, 256)
+
+            # Get original model outputs
+            with torch.no_grad():
+                losses_orig, boxes_orig, scores_orig, labels_orig = model(test_input)
+
+            # Get ONNX model outputs
+            ort_inputs = {sess.get_inputs()[0].name: test_input.numpy()}
+            ort_outputs = sess.run(None, ort_inputs)
+
+            # ONNX outputs loss tuple (5 elements) flattened with boxes, scores and labels
+            # so a total of 8 outputs
+            assert len(ort_outputs) == 8
+
+            # Compare outputs (allowing for small numerical differences)
+            boxes_onnx = torch.from_numpy(ort_outputs[-3])
+            scores_onnx = torch.from_numpy(ort_outputs[-2])
+            labels_onnx = torch.from_numpy(ort_outputs[-1])
+
+            assert torch.allclose(boxes_orig, boxes_onnx, atol=1e-4), f"Boxes mismatch for batch_size={batch_size}"
+            assert torch.allclose(scores_orig, scores_onnx, atol=1e-4), f"Scores mismatch for batch_size={batch_size}"
+            assert torch.equal(labels_orig, labels_onnx), f"Labels mismatch for batch_size={batch_size}"
+
+    finally:
+        # Clean up temporary file
+        if os.path.exists(onnx_path):
+            os.unlink(onnx_path)
 
     warnings.resetwarnings()

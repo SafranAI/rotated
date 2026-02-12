@@ -178,6 +178,7 @@ def _rotated_nms_sequential(
     """Sequential NMS without pre-computed IoU matrix.
 
     Original implementation - slowest but uses minimal memory O(N).
+    NOTE: not compatible with ONNX export.
 
     Args:
         boxes: Rotated boxes [N, 5] format [cx, cy, w, h, angle]
@@ -246,13 +247,13 @@ def _rotated_nms_vectorized(
     iou_matrix, order, N = _compute_iou_matrix(boxes=boxes, scores=scores, n_samples=n_samples, eps=eps)
 
     suppress = iou_matrix > iou_threshold
-    keep_mask = torch.ones(N, dtype=torch.bool, device=boxes.device)
+    keep_mask = torch.ones(N, dtype=torch.uint8, device=boxes.device)
 
     for i in range(N - 1):
         if keep_mask[i]:
-            keep_mask[suppress[i]] = False
+            keep_mask[suppress[i]] = 0
 
-    return order[keep_mask]
+    return order[keep_mask.to(dtype=torch.bool)]
 
 
 @torch.jit.script_if_tracing
