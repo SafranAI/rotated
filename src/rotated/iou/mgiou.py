@@ -53,7 +53,7 @@ class MGIoU2D:
             # convert to corners
             c1 = obb_to_corners_format(pred[mask], degrees=False)
             c2 = obb_to_corners_format(target[mask], degrees=False)
-            iou[mask] = self._mgiou_boxes(c1, c2)
+            iou[mask] = self._mgiou_boxes(c1, c2).to(iou.dtype)
 
         return iou.clamp(0.0, 1.0)
 
