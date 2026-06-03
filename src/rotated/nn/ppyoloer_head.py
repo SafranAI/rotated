@@ -274,7 +274,7 @@ class PPYOLOERHead(nn.Module):
         """Generate anchors from feature maps."""
         shapes_list = []
         for feat in feats:
-            shapes_list.append((int(feat.shape[2]), int(feat.shape[3])))
+            shapes_list.append((feat.size(2), feat.size(3)))
         shapes = tuple(shapes_list)
 
         device_str = str(feats[0].device)

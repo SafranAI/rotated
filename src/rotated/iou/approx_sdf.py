@@ -118,8 +118,44 @@ def _saf_obox2obox_vec(
     x_comp = torch.maximum(qqxy[..., 0], zeros) * sign * torch.sign(ppxy[..., 0])  # (n, n_samples, 4)
     y_comp = torch.maximum(qqxy[..., 1], zeros) * (~sign) * torch.sign(ppxy[..., 1])
 
-    dx = torch.gradient(ppx, dim=1)[0]  # (n, n_samples, 4)
-    dy = torch.gradient(ppy, dim=1)[0]  # (n, n_samples, 4)
+    dx = _gradient_central_diff_dim1(ppx)  # (n, n_samples, 4)
+    dy = _gradient_central_diff_dim1(ppy)  # (n, n_samples, 4)
 
     safii = x_comp * dy - y_comp * dx
     return safii.sum(dim=[-2, -1], dtype=pred_boxes.dtype)
+
+
+def _gradient_central_diff_dim1(input_tensor: torch.Tensor) -> torch.Tensor:
+    """Compute gradient using central differences along dimension 1 (ONNX-compatible alternative to torch.gradient).
+
+    This function replicates the behavior of torch.gradient(input, dim=1)[0]
+    using only ONNX-compatible operations. It computes central differences for
+    interior points and forward/backward differences for boundary points.
+
+    This is specialized for dim=1 which is the only case used in the IoU computation.
+
+    Args:
+        input_tensor: Input tensor (expected to have at least 2 dimensions)
+
+    Returns:
+        Gradient tensor with the same shape as input
+    """
+    size_dim1 = input_tensor.size(1)
+
+    if size_dim1 == 1:
+        # If only one element along dimension 1, gradient is zero
+        return torch.zeros_like(input_tensor)
+
+    output = torch.empty_like(input_tensor)
+
+    # Forward difference for first element along dimension 1
+    output[:, 0] = input_tensor[:, 1] - input_tensor[:, 0]
+
+    # Central differences for interior points along dimension 1
+    if size_dim1 > 2:
+        output[:, 1:-1] = (input_tensor[:, 2:] - input_tensor[:, :-2]) / 2.0
+
+    # Backward difference for last element along dimension 1
+    output[:, -1] = input_tensor[:, -1] - input_tensor[:, -2]
+
+    return output
